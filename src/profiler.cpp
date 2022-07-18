@@ -178,6 +178,9 @@ const char* Profiler::asgctError(int code) {
             return "safepoint";
         case ticks_skipped:
             return "skipped";
+        case ticks_unknown_state:
+            // Zing sometimes returns it
+            return "unknown_state";
         default:
             // Should not happen
             return "unexpected_state";
@@ -256,10 +259,10 @@ const char* Profiler::getLibraryName(const char* native_symbol) {
 }
 
 CodeCache* Profiler::findJvmLibrary(const char* lib_name) {
-    if (!VM::isOpenJ9()) {
-        return VMStructs::libjvm();
-    }
+    return VM::isOpenJ9() ? findLibraryByName(lib_name) : VMStructs::libjvm();
+}
 
+CodeCache* Profiler::findLibraryByName(const char* lib_name) {
     const size_t lib_name_len = strlen(lib_name);
     const int native_lib_count = _native_libs.count();
     for (int i = 0; i < native_lib_count; i++) {
@@ -274,7 +277,7 @@ CodeCache* Profiler::findJvmLibrary(const char* lib_name) {
     return NULL;
 }
 
-CodeCache* Profiler::findNativeLibrary(const void* address) {
+CodeCache* Profiler::findLibraryByAddress(const void* address) {
     const int native_lib_count = _native_libs.count();
     for (int i = 0; i < native_lib_count; i++) {
         if (_native_libs[i]->contains(address)) {
@@ -285,7 +288,7 @@ CodeCache* Profiler::findNativeLibrary(const void* address) {
 }
 
 const char* Profiler::findNativeMethod(const void* address) {
-    CodeCache* lib = findNativeLibrary(address);
+    CodeCache* lib = findLibraryByAddress(address);
     return lib == NULL ? NULL : lib->binarySearch(address);
 }
 
@@ -294,7 +297,7 @@ bool Profiler::isAddressInCode(uintptr_t addr) {
     if (CodeHeap::contains(pc)) {
         return CodeHeap::findNMethod(pc) != NULL && !(pc >= _call_stub_begin && pc < _call_stub_end);
     } else {
-        return findNativeLibrary(pc) != NULL;
+        return findLibraryByAddress(pc) != NULL;
     }
 }
 
@@ -410,7 +413,7 @@ int Profiler::getJavaTraceAsync(void* ucontext, ASGCT_CallFrame* frames, int max
             }
         } else if (VMStructs::hasMethodStructs()) {
             NMethod* nmethod = CodeHeap::findNMethod((const void*)frame.pc());
-            if (nmethod != NULL && nmethod->isNMethod()) {
+            if (nmethod != NULL && nmethod->isNMethod() && nmethod->isAlive()) {
                 VMMethod* method = nmethod->method();
                 if (method != NULL) {
                     jmethodID method_id = method->constMethod()->id();
@@ -448,7 +451,7 @@ int Profiler::getJavaTraceAsync(void* ucontext, ASGCT_CallFrame* frames, int max
                     m->setFrameCompleteOffset(0);
                 }
                 VM::_asyncGetCallTrace(&trace, max_depth, ucontext);
-            } else if (findNativeLibrary((const void*)pc) != NULL) {
+            } else if (findLibraryByAddress((const void*)pc) != NULL) {
                 VM::_asyncGetCallTrace(&trace, max_depth, ucontext);
             }
 
@@ -530,7 +533,7 @@ inline int Profiler::convertFrames(jvmtiFrameInfo* jvmti_frames, ASGCT_CallFrame
 }
 
 void Profiler::fillFrameTypes(ASGCT_CallFrame* frames, int num_frames, NMethod* nmethod) {
-    if (nmethod->isNMethod()) {
+    if (nmethod->isNMethod() && nmethod->isAlive()) {
         VMMethod* method = nmethod->method();
         if (method == NULL) {
             return;
@@ -599,7 +602,7 @@ void Profiler::recordSample(void* ucontext, u64 counter, jint event_type, Event*
     if (event_type == 0) {
         // Async events
         int java_frames = getJavaTraceAsync(ucontext, frames + num_frames, _max_stack_depth, &java_ctx);
-        if (java_frames > 0 && java_ctx.pc != NULL) {
+        if (java_frames > 0 && java_ctx.pc != NULL && VMStructs::hasMethodStructs()) {
             NMethod* nmethod = CodeHeap::findNMethod(java_ctx.pc);
             if (nmethod != NULL) {
                 fillFrameTypes(frames + num_frames, java_frames, nmethod);
@@ -713,6 +716,7 @@ Error Profiler::installTraps(const char* begin, const char* end) {
 void Profiler::uninstallTraps() {
     _begin_trap.uninstall();
     _end_trap.uninstall();
+    _engine->enableEvents(false);
 }
 
 void Profiler::trapHandler(int signo, siginfo_t* siginfo, void* ucontext) {
@@ -890,7 +894,6 @@ Error Profiler::checkJvmCapabilities() {
         if (lib == NULL || (_dlopen_entry = lib->findGlobalOffsetEntry((void*)dlopen)) == NULL) {
             return Error("Could not set dlopen hook. Unsupported JVM?");
         }
-        Symbols::makePatchable(lib);
     }
 
     if (!VMStructs::hasDebugSymbols() && !VM::isOpenJ9()) {
@@ -1044,6 +1047,7 @@ error1:
     _jfr.stop();
     unlockAll();
 
+    FdTransferClient::closePeer();
     return error;
 }
 
