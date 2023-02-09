@@ -44,6 +44,8 @@ class NativeFunc {
     static char* create(const char* name, short lib_index);
     static void destroy(char* name);
 
+    static size_t usedMemory(const char* name);
+
     static short libIndex(const char* name) {
         return from(name)->_lib_index;
     }
@@ -93,6 +95,7 @@ class CodeCache {
     void** _got_start;
     void** _got_end;
     bool _got_patchable;
+    bool _debug_symbols;
 
     FrameDesc* _dwarf_table;
     int _dwarf_table_length;
@@ -102,7 +105,6 @@ class CodeCache {
     CodeBlob* _blobs;
 
     void expand();
-    void makeGotPatchable();
 
   public:
     CodeCache(const char* name,
@@ -132,6 +134,22 @@ class CodeCache {
         _text_base = text_base;
     }
 
+    void** gotStart() const {
+        return _got_start;
+    }
+
+    void** gotEnd() const {
+        return _got_end;
+    }
+
+    bool hasDebugSymbols() const {
+        return _debug_symbols;
+    }
+
+    void setDebugSymbols(bool debug_symbols) {
+        _debug_symbols = debug_symbols;
+    }
+
     void add(const void* start, int length, const char* name, bool update_bounds = false);
     void updateBounds(const void* start, const void* end);
     void sort();
@@ -145,9 +163,12 @@ class CodeCache {
 
     void setGlobalOffsetTable(void** start, void** end, bool patchable);
     void** findGlobalOffsetEntry(void* address);
+    void makeGotPatchable();
 
     void setDwarfTable(FrameDesc* table, int length);
     FrameDesc* findFrameDesc(const void* pc);
+
+    size_t usedMemory();
 };
 
 

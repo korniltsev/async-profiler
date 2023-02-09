@@ -37,17 +37,17 @@
 class SymbolDesc {
   private:
     const char* _addr;
-    const char* _type;
+    const char* _desc;
 
   public:
       SymbolDesc(const char* s) {
           _addr = s;
-          _type = strchr(_addr, ' ') + 1;
+          _desc = strchr(_addr, ' ');
       }
 
       const char* addr() { return (const char*)strtoul(_addr, NULL, 16); }
-      char type()        { return _type[0]; }
-      const char* name() { return _type + 2; }
+      char type()        { return _desc != NULL ? _desc[1] : 0; }
+      const char* name() { return _desc + 3; }
 };
 
 class MemoryMapDesc {
@@ -81,8 +81,14 @@ class MemoryMapDesc {
       const char* addr()    { return (const char*)strtoul(_addr, NULL, 16); }
       const char* end()     { return (const char*)strtoul(_end, NULL, 16); }
       unsigned long offs()  { return strtoul(_offs, NULL, 16); }
-      unsigned long dev()   { return strtoul(_dev, NULL, 16) << 8 | strtoul(_dev + 3, NULL, 16); }
       unsigned long inode() { return strtoul(_inode, NULL, 10); }
+
+      unsigned long dev() {
+          char* colon;
+          unsigned long major = strtoul(_dev, &colon, 16);
+          unsigned long minor = strtoul(colon + 1, NULL, 16);
+          return major << 8 | minor;
+      }
 };
 
 
@@ -140,6 +146,7 @@ class ElfParser {
     const char* _file_name;
     ElfHeader* _header;
     const char* _sections;
+    const char* _vaddr_diff;
 
     ElfParser(CodeCache* cc, const char* base, const void* addr, const char* file_name = NULL) {
         _cc = cc;
@@ -165,12 +172,13 @@ class ElfParser {
     }
 
     const char* at(ElfProgramHeader* pheader) {
-        return _header->e_type == ET_EXEC ? (const char*)pheader->p_vaddr : (const char*)_header + pheader->p_vaddr;
+        return _header->e_type == ET_EXEC ? (const char*)pheader->p_vaddr : _vaddr_diff + pheader->p_vaddr;
     }
 
     ElfSection* findSection(uint32_t type, const char* name);
     ElfProgramHeader* findProgramHeader(uint32_t type);
 
+    void calcVirtualLoadAddress();
     void parseDynamicSection();
     void parseDwarfInfo();
     void loadSymbols(bool use_debug);
@@ -180,7 +188,7 @@ class ElfParser {
     void addRelocationSymbols(ElfSection* reltab, const char* plt);
 
   public:
-    static void parseProgramHeaders(CodeCache* cc, const char* base);
+    static void parseProgramHeaders(CodeCache* cc, const char* base, const char* end);
     static bool parseFile(CodeCache* cc, const char* base, const char* file_name, bool use_debug);
     static void parseMem(CodeCache* cc, const char* base);
 };
@@ -243,13 +251,27 @@ void ElfParser::parseMem(CodeCache* cc, const char* base) {
     }
 }
 
-void ElfParser::parseProgramHeaders(CodeCache* cc, const char* base) {
+void ElfParser::parseProgramHeaders(CodeCache* cc, const char* base, const char* end) {
     ElfParser elf(cc, base, base);
-    if (elf.validHeader()) {
+    if (elf.validHeader() && base + elf._header->e_phoff < end) {
         cc->setTextBase(base);
+        elf.calcVirtualLoadAddress();
         elf.parseDynamicSection();
         elf.parseDwarfInfo();
     }
+}
+
+void ElfParser::calcVirtualLoadAddress() {
+    // Find a difference between the virtual load address (often zero) and the actual DSO base
+    const char* pheaders = (const char*)_header + _header->e_phoff;
+    for (int i = 0; i < _header->e_phnum; i++) {
+        ElfProgramHeader* pheader = (ElfProgramHeader*)(pheaders + i * _header->e_phentsize);
+        if (pheader->p_type == PT_LOAD) {
+            _vaddr_diff = _base - pheader->p_vaddr;
+            return;
+        }
+    }
+    _vaddr_diff = _base;
 }
 
 void ElfParser::parseDynamicSection() {
@@ -336,6 +358,7 @@ void ElfParser::loadSymbols(bool use_debug) {
     ElfSection* section = findSection(SHT_SYMTAB, ".symtab");
     if (section != NULL) {
         loadSymbolTable(section);
+        _cc->setDebugSymbols(true);
         goto loaded;
     }
 
@@ -480,7 +503,7 @@ void ElfParser::addRelocationSymbols(ElfSection* reltab, const char* plt) {
 Mutex Symbols::_parse_lock;
 bool Symbols::_have_kernel_symbols = false;
 static std::set<const void*> _parsed_libraries;
-static std::set<unsigned long> _parsed_inodes;
+static std::set<u64> _parsed_inodes;
 
 void Symbols::parseKernelSymbols(CodeCache* cc) {
     int fd;
@@ -580,10 +603,10 @@ void Symbols::parseLibraries(CodeCacheArray* array, bool kernel_symbols) {
             unsigned long inode = map.inode();
             if (inode != 0) {
                 // Do not parse the same executable twice, e.g. on Alpine Linux
-                if (_parsed_inodes.insert(map.dev() | inode << 16).second) {
+                if (_parsed_inodes.insert(u64(map.dev()) << 32 | inode).second) {
                     // Be careful: executable file is not always ELF, e.g. classes.jsa
                     if ((image_base -= map.offs()) >= last_readable_base) {
-                        ElfParser::parseProgramHeaders(cc, image_base);
+                        ElfParser::parseProgramHeaders(cc, image_base, image_end);
                     }
                     ElfParser::parseFile(cc, image_base, map.file(), true);
                 }
