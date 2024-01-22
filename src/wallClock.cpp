@@ -1,17 +1,6 @@
 /*
- * Copyright 2018 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <string.h>
@@ -34,6 +23,7 @@ const long MIN_INTERVAL = 100000;
 
 
 long WallClock::_interval;
+int WallClock::_signal;
 bool WallClock::_sample_idle_threads;
 
 ThreadState WallClock::getThreadState(void* ucontext) {
@@ -59,8 +49,8 @@ ThreadState WallClock::getThreadState(void* ucontext) {
 
 void WallClock::signalHandler(int signo, siginfo_t* siginfo, void* ucontext) {
     ExecutionEvent event;
-    event._thread_state = _sample_idle_threads ? getThreadState(ucontext) : THREAD_RUNNING;
-    Profiler::instance()->recordSample(ucontext, _interval, 0, &event);
+    event._thread_state = _sample_idle_threads ? getThreadState(ucontext) : THREAD_UNKNOWN;
+    Profiler::instance()->recordSample(ucontext, _interval, EXECUTION_SAMPLE, &event);
 }
 
 long WallClock::adjustInterval(long interval, int thread_count) {
@@ -71,16 +61,16 @@ long WallClock::adjustInterval(long interval, int thread_count) {
 }
 
 Error WallClock::start(Arguments& args) {
-    if (args._interval < 0) {
-        return Error("interval must be positive");
+    _sample_idle_threads = args._wall >= 0 || strcmp(args._event, EVENT_WALL) == 0;
+
+    _interval = args._wall >= 0 ? args._wall : args._interval;
+    if (_interval == 0) {
+        // Increase default interval for wall clock mode due to larger number of sampled threads
+        _interval = _sample_idle_threads ? DEFAULT_INTERVAL * 5 : DEFAULT_INTERVAL;
     }
 
-    _sample_idle_threads = strcmp(args._event, EVENT_WALL) == 0;
-
-    // Increase default interval for wall clock mode due to larger number of sampled threads
-    _interval = args._interval ? args._interval : (_sample_idle_threads ? DEFAULT_INTERVAL * 5 : DEFAULT_INTERVAL);
-
-    OS::installSignalHandler(SIGVTALRM, signalHandler);
+    _signal = args._signal == 0 ? SIGVTALRM : ((args._signal >> 8) > 0 ? args._signal >> 8 : args._signal);
+    OS::installSignalHandler(_signal, signalHandler);
 
     _running = true;
 
@@ -130,7 +120,7 @@ void WallClock::timerLoop() {
             }
 
             if (sample_idle_threads || OS::threadState(thread_id) == THREAD_RUNNING) {
-                if (OS::sendSignalToThread(thread_id, SIGVTALRM)) {
+                if (OS::sendSignalToThread(thread_id, _signal)) {
                     count++;
                 }
             }

@@ -1,17 +1,6 @@
 /*
- * Copyright 2021 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 package one.profiler;
@@ -26,6 +15,7 @@ import java.io.IOException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Paths;
 import java.text.ParseException;
+import java.util.StringTokenizer;
 
 /**
  * Synchronize async-profiler recording with an existing JFR recording.
@@ -49,17 +39,22 @@ class JfrSync implements FlightRecorderListener {
     }
 
     public static void start(String fileName, String settings, int eventMask) throws IOException, ParseException {
-        Configuration config;
-        try {
-            config = Configuration.getConfiguration(settings);
-        } catch (NoSuchFileException e) {
-            config = Configuration.create(Paths.get(settings));
+        Recording recording;
+        if (settings.startsWith("+")) {
+            recording = new Recording();
+            for (StringTokenizer st = new StringTokenizer(settings, "+"); st.hasMoreTokens(); ) {
+                recording.enable(st.nextToken());
+            }
+        } else {
+            try {
+                recording = new Recording(Configuration.getConfiguration(settings));
+            } catch (NoSuchFileException e) {
+                recording = new Recording(Configuration.create(Paths.get(settings)));
+            }
+            disableBuiltinEvents(recording, eventMask);
         }
 
-        Recording recording = new Recording(config);
         masterRecording = recording;
-
-        disableBuiltinEvents(recording, eventMask);
 
         recording.setDestination(Paths.get(fileName));
         recording.setToDisk(true);
@@ -105,6 +100,9 @@ class JfrSync implements FlightRecorderListener {
         }
         if ((eventMask & 0x80) != 0) {
             recording.disable("jdk.CPULoad");
+        }
+        if ((eventMask & 0x100) != 0) {
+            recording.disable("jdk.GCHeapSummary");
         }
     }
 

@@ -1,17 +1,6 @@
 /*
- * Copyright 2021 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The jattach authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <stdio.h>
@@ -47,7 +36,11 @@ static void translate_command(char* buf, size_t bufsize, int argc, char** argv) 
         }
 
     } else if (strcmp(cmd, "jcmd") == 0) {
-        snprintf(buf, bufsize, "ATTACH_DIAGNOSTICS:%s,%s", argc > 1 ? argv[1] : "help", argc > 2 ? argv[2] : "");
+        size_t n = snprintf(buf, bufsize, "ATTACH_DIAGNOSTICS:%s", argc > 1 ? argv[1] : "help");
+        int i;
+        for (i = 2; i < argc && n < bufsize; i++) {
+            n += snprintf(buf + n, bufsize - n, ",%s", argv[i]);
+        }
 
     } else if (strcmp(cmd, "threaddump") == 0) {
         snprintf(buf, bufsize, "ATTACH_DIAGNOSTICS:Thread.print,%s", argc > 1 ? argv[1] : "");
@@ -123,7 +116,7 @@ static int write_command(int fd, const char* cmd) {
 }
 
 // Mirror response from remote JVM to stdout
-static int read_response(int fd, const char* cmd) {
+static int read_response(int fd, const char* cmd, int print_output) {
     size_t size = 8192;
     char* buf = malloc(size);
 
@@ -160,7 +153,7 @@ static int read_response(int fd, const char* cmd) {
             // AgentOnLoad error code comes right after AgentInitializationException
             result = strncmp(buf, "ATTACH_ERR AgentInitializationException", 39) == 0 ? atoi(buf + 39) : -1;
         }
-    } else if (strncmp(cmd, "ATTACH_DIAGNOSTICS:", 19) == 0) {
+    } else if (strncmp(cmd, "ATTACH_DIAGNOSTICS:", 19) == 0 && print_output) {
         char* p = strstr(buf, "openj9_diagnostics.string_result=");
         if (p != NULL) {
             // The result of a diagnostic command is encoded in Java Properties format
@@ -170,8 +163,10 @@ static int read_response(int fd, const char* cmd) {
         }
     }
 
-    buf[off - 1] = '\n';
-    fwrite(buf, 1, off, stdout);
+    if (print_output) {
+        buf[off - 1] = '\n';
+        fwrite(buf, 1, off, stdout);
+    }
 
     free(buf);
     return result;
@@ -221,7 +216,8 @@ static int create_attach_socket(int* port) {
     // Try IPv6 socket first, then fall back to IPv4
     int s = socket(AF_INET6, SOCK_STREAM, 0);
     if (s != -1) {
-        struct sockaddr_in6 addr = {AF_INET6, 0};
+        struct sockaddr_in6 addr = {0};
+        addr.sin6_family = AF_INET6;
         socklen_t addrlen = sizeof(addr);
         if (bind(s, (struct sockaddr*)&addr, addrlen) == 0 && listen(s, 0) == 0
                 && getsockname(s, (struct sockaddr*)&addr, &addrlen) == 0) {
@@ -229,7 +225,8 @@ static int create_attach_socket(int* port) {
             return s;
         }
     } else if ((s = socket(AF_INET, SOCK_STREAM, 0)) != -1) {
-        struct sockaddr_in addr = {AF_INET, 0};
+        struct sockaddr_in addr = {0};
+        addr.sin_family = AF_INET;
         socklen_t addrlen = sizeof(addr);
         if (bind(s, (struct sockaddr*)&addr, addrlen) == 0 && listen(s, 0) == 0
                 && getsockname(s, (struct sockaddr*)&addr, &addrlen) == 0) {
@@ -373,7 +370,7 @@ int is_openj9_process(int pid) {
     return stat(path, &stats) == 0;
 }
 
-int jattach_openj9(int pid, int nspid, int argc, char** argv) {
+int jattach_openj9(int pid, int nspid, int argc, char** argv, int print_output) {
     int attach_lock = acquire_lock("", "_attachlock");
     if (attach_lock < 0) {
         perror("Could not acquire attach lock");
@@ -411,7 +408,9 @@ int jattach_openj9(int pid, int nspid, int argc, char** argv) {
     notify_semaphore(-1, notif_count);
     release_lock(attach_lock);
 
-    printf("Connected to remote JVM\n");
+    if (print_output) {
+        printf("Connected to remote JVM\n");
+    }
 
     char cmd[8192];
     translate_command(cmd, sizeof(cmd), argc, argv);
@@ -422,7 +421,7 @@ int jattach_openj9(int pid, int nspid, int argc, char** argv) {
         return 1;
     }
 
-    int result = read_response(fd, cmd);
+    int result = read_response(fd, cmd, print_output);
     if (result != 1) {
         detach(fd);
     }

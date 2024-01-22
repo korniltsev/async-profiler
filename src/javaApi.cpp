@@ -1,23 +1,13 @@
 /*
- * Copyright 2016 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <fstream>
 #include <sstream>
 #include <errno.h>
 #include <string.h>
+#include "asprof.h"
 #include "incbin.h"
 #include "javaApi.h"
 #include "os.h"
@@ -25,7 +15,7 @@
 #include "vmStructs.h"
 
 
-INCBIN(SERVER_CLASS, "one/profiler/Server.class")
+INCBIN(SERVER_CLASS, "src/helper/one/profiler/Server.class")
 
 
 static void throwNew(JNIEnv* env, const char* exception_class, const char* message) {

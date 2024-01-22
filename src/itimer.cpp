@@ -1,48 +1,14 @@
 /*
- * Copyright 2018 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <sys/time.h>
 #include "itimer.h"
 #include "j9StackTraces.h"
 #include "os.h"
-#include "profiler.h"
-#include "stackWalker.h"
+#include "vmEntry.h"
 
-
-long ITimer::_interval;
-CStack ITimer::_cstack;
-
-
-void ITimer::signalHandler(int signo, siginfo_t* siginfo, void* ucontext) {
-    if (!_enabled) return;
-
-    ExecutionEvent event;
-    Profiler::instance()->recordSample(ucontext, _interval, 0, &event);
-}
-
-void ITimer::signalHandlerJ9(int signo, siginfo_t* siginfo, void* ucontext) {
-    if (!_enabled) return;
-
-    J9StackTraceNotification notif;
-    StackContext java_ctx;
-    notif.num_frames = _cstack == CSTACK_NO ? 0 : _cstack == CSTACK_DWARF
-        ? StackWalker::walkDwarf(ucontext, notif.addr, MAX_J9_NATIVE_FRAMES, &java_ctx)
-        : StackWalker::walkFP(ucontext, notif.addr, MAX_J9_NATIVE_FRAMES, &java_ctx);
-    J9StackTraces::checkpoint(_interval, &notif);
-}
 
 Error ITimer::check(Arguments& args) {
     OS::installSignalHandler(SIGPROF, NULL, SIG_IGN);
@@ -64,6 +30,7 @@ Error ITimer::start(Arguments& args) {
     }
     _interval = args._interval ? args._interval : DEFAULT_INTERVAL;
     _cstack = args._cstack;
+    _signal = SIGPROF;
 
     if (VM::isOpenJ9()) {
         if (_cstack == CSTACK_DEFAULT) _cstack = CSTACK_DWARF;

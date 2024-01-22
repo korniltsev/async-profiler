@@ -1,17 +1,6 @@
 /*
- * Copyright 2022 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 import java.lang.reflect.Field;
@@ -21,31 +10,33 @@ import java.util.GregorianCalendar;
 import java.util.StringTokenizer;
 import java.util.regex.Pattern;
 
-class Arguments {
+public class Arguments {
     String title = "Flame Graph";
     String highlight;
+    String state;
     Pattern include;
     Pattern exclude;
     double minwidth;
     int skip;
     boolean reverse;
-    boolean cpu;
     boolean alloc;
     boolean live;
     boolean lock;
     boolean threads;
+    boolean classify;
     boolean total;
     boolean lines;
     boolean bci;
     boolean simple;
     boolean dot;
+    boolean norm;
     boolean collapsed;
     long from;
     long to;
     String input;
     String output;
 
-    Arguments(String... args) {
+    public Arguments(String... args) {
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
             if (arg.startsWith("--")) {

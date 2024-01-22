@@ -1,17 +1,6 @@
 /*
- * Copyright 2021 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The jattach authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <stdio.h>
@@ -26,6 +15,8 @@
 #include <unistd.h>
 #include "psutil.h"
 
+
+extern int mnt_changed;
 
 // Check if remote JVM has already opened socket for Dynamic Attach
 static int check_socket(int pid) {
@@ -46,7 +37,7 @@ static uid_t get_file_owner(const char* path) {
 // HotSpot will start Attach listener in response to SIGQUIT if it sees .attach_pid file
 static int start_attach_mechanism(int pid, int nspid) {
     char path[MAX_PATH];
-    snprintf(path, sizeof(path), "/proc/%d/cwd/.attach_pid%d", nspid, nspid);
+    snprintf(path, sizeof(path), "/proc/%d/cwd/.attach_pid%d", mnt_changed > 0 ? nspid : pid, nspid);
 
     int fd = creat(path, 0660);
     if (fd == -1 || (close(fd) == 0 && get_file_owner(path) != geteuid())) {
@@ -102,23 +93,37 @@ static int connect_socket(int pid) {
 
 // Send command with arguments to socket
 static int write_command(int fd, int argc, char** argv) {
+    char buf[8192];
+    const char* const limit = buf + sizeof(buf);
+
+    // jcmd has 2 arguments maximum; merge excessive arguments into one
+    int cmd_args = argc >= 2 && strcmp(argv[0], "jcmd") == 0 ? 2 : argc >= 4 ? 4 : argc;
+
     // Protocol version
-    if (write(fd, "1", 2) <= 0) {
-        return -1;
-    }
+    char* p = stpncpy(buf, "1", sizeof(buf)) + 1;
 
     int i;
-    for (i = 0; i < 4; i++) {
-        const char* arg = i < argc ? argv[i] : "";
-        if (write(fd, arg, strlen(arg) + 1) <= 0) {
+    for (i = 0; i < argc && p < limit; i++) {
+        if (i >= cmd_args) p[-1] = ' ';
+        p = stpncpy(p, argv[i], limit - p) + 1;
+    }
+    for (i = cmd_args; i < 4 && p < limit; i++) {
+        *p++ = 0;
+    }
+
+    const char* q = p < limit ? p : limit;
+    for (p = buf; p < q; ) {
+        ssize_t bytes = write(fd, p, q - p);
+        if (bytes <= 0) {
             return -1;
         }
+        p += (size_t)bytes;
     }
     return 0;
 }
 
 // Mirror response from remote JVM to stdout
-static int read_response(int fd, int argc, char** argv) {
+static int read_response(int fd, int argc, char** argv, int print_output) {
     char buf[8192];
     ssize_t bytes = read(fd, buf, sizeof(buf) - 1);
     if (bytes == 0) {
@@ -146,18 +151,20 @@ static int read_response(int fd, int argc, char** argv) {
         result = atoi(strncmp(buf + 2, "return code: ", 13) == 0 ? buf + 15 : buf + 2);
     }
 
-    // Mirror JVM response to stdout
-    printf("JVM response code = ");
-    do {
-        fwrite(buf, 1, bytes, stdout);
-        bytes = read(fd, buf, sizeof(buf));
-    } while (bytes > 0);
-    printf("\n");
+    if (print_output) {
+        // Mirror JVM response to stdout
+        printf("JVM response code = ");
+        do {
+            fwrite(buf, 1, bytes, stdout);
+            bytes = read(fd, buf, sizeof(buf));
+        } while (bytes > 0);
+        printf("\n");
+    }
 
     return result;
 }
 
-int jattach_hotspot(int pid, int nspid, int argc, char** argv) {
+int jattach_hotspot(int pid, int nspid, int argc, char** argv, int print_output) {
     if (check_socket(nspid) != 0 && start_attach_mechanism(pid, nspid) != 0) {
         perror("Could not start attach mechanism");
         return 1;
@@ -169,7 +176,9 @@ int jattach_hotspot(int pid, int nspid, int argc, char** argv) {
         return 1;
     }
 
-    printf("Connected to remote JVM\n");
+    if (print_output) {
+        printf("Connected to remote JVM\n");
+    }
 
     if (write_command(fd, argc, argv) != 0) {
         perror("Error writing to socket");
@@ -177,7 +186,7 @@ int jattach_hotspot(int pid, int nspid, int argc, char** argv) {
         return 1;
     }
 
-    int result = read_response(fd, argc, argv);
+    int result = read_response(fd, argc, argv, print_output);
     close(fd);
 
     return result;

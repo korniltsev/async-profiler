@@ -1,17 +1,6 @@
 /*
- * Copyright 2017 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #ifndef _CODECACHE_H
@@ -27,6 +16,20 @@ typedef bool (*NamePredicate)(const char* name);
 
 const int INITIAL_CODE_CACHE_CAPACITY = 1000;
 const int MAX_NATIVE_LIBS = 2048;
+
+
+enum ImportId {
+    im_dlopen,
+    im_pthread_create,
+    im_pthread_exit,
+    im_pthread_setspecific,
+    NUM_IMPORTS
+};
+
+enum Mark {
+    MARK_INTERPRETER = 1,
+    MARK_COMPILER_ENTRY = 2
+};
 
 
 class NativeFunc {
@@ -50,12 +53,12 @@ class NativeFunc {
         return from(name)->_lib_index;
     }
 
-    static bool isMarked(const char* name) {
-        return from(name)->_mark != 0;
+    static char mark(const char* name) {
+        return from(name)->_mark;
     }
 
-    static void mark(const char* name) {
-        from(name)->_mark = 1;
+    static void mark(const char* name, char value) {
+        from(name)->_mark = value;
     }
 };
 
@@ -85,16 +88,18 @@ class CodeBlob {
 class FrameDesc;
 
 class CodeCache {
-  protected:
+  private:
     char* _name;
     short _lib_index;
     const void* _min_address;
     const void* _max_address;
     const char* _text_base;
 
-    void** _got_start;
-    void** _got_end;
-    bool _got_patchable;
+    unsigned int _plt_offset;
+    unsigned int _plt_size;
+
+    void** _imports[NUM_IMPORTS];
+    bool _imports_patchable;
     bool _debug_symbols;
 
     FrameDesc* _dwarf_table;
@@ -105,10 +110,12 @@ class CodeCache {
     CodeBlob* _blobs;
 
     void expand();
+    void makeImportsPatchable();
 
   public:
     CodeCache(const char* name,
               short lib_index = -1,
+              bool imports_patchable = false,
               const void* min_address = NO_MIN_ADDRESS,
               const void* max_address = NO_MAX_ADDRESS);
 
@@ -134,12 +141,9 @@ class CodeCache {
         _text_base = text_base;
     }
 
-    void** gotStart() const {
-        return _got_start;
-    }
-
-    void** gotEnd() const {
-        return _got_end;
+    void setPlt(unsigned int plt_offset, unsigned int plt_size) {
+        _plt_offset = plt_offset;
+        _plt_size = plt_size;
     }
 
     bool hasDebugSymbols() const {
@@ -153,17 +157,18 @@ class CodeCache {
     void add(const void* start, int length, const char* name, bool update_bounds = false);
     void updateBounds(const void* start, const void* end);
     void sort();
-    void mark(NamePredicate predicate);
+    void mark(NamePredicate predicate, char value);
 
-    CodeBlob* find(const void* address);
+    void addImport(void** entry, const char* name);
+    void** findImport(ImportId id);
+    void patchImport(ImportId, void* hook_func);
+
+    CodeBlob* findBlob(const char* name);
+    CodeBlob* findBlobByAddress(const void* address);
     const char* binarySearch(const void* address);
     const void* findSymbol(const char* name);
     const void* findSymbolByPrefix(const char* prefix);
     const void* findSymbolByPrefix(const char* prefix, int prefix_len);
-
-    void setGlobalOffsetTable(void** start, void** end, bool patchable);
-    void** findGlobalOffsetEntry(void* address);
-    void makeGotPatchable();
 
     void setDwarfTable(FrameDesc* table, int length);
     FrameDesc* findFrameDesc(const void* pc);

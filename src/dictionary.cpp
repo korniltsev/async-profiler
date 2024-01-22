@@ -1,17 +1,6 @@
 /*
- * Copyright 2020 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <stdlib.h>
@@ -34,7 +23,7 @@ static inline bool keyEquals(const char* candidate, const char* key, size_t leng
 
 Dictionary::Dictionary() {
     _table = (DictTable*)calloc(1, sizeof(DictTable));
-    _table->base_index = _base_index = 1;
+    _base_index = _table->base_index = 1;
 }
 
 Dictionary::~Dictionary() {
@@ -45,7 +34,7 @@ Dictionary::~Dictionary() {
 void Dictionary::clear() {
     clear(_table);
     memset(_table, 0, sizeof(DictTable));
-    _table->base_index = _base_index = 1;
+    _base_index = _table->base_index = 1;
 }
 
 void Dictionary::clear(DictTable* table) {

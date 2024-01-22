@@ -1,23 +1,12 @@
 /*
- * Copyright 2017 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <cxxabi.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "demangle.h"
 #include "frameName.h"
 #include "profiler.h"
 #include "vmStructs.h"
@@ -130,8 +119,7 @@ const char* FrameName::decodeNativeSymbol(const char* name) {
     const char* lib_name = (_style & STYLE_LIB_NAMES) ? Profiler::instance()->getLibraryName(name) : NULL;
 
     if (name[0] == '_' && name[1] == 'Z') {
-        int status;
-        char* demangled = abi::__cxa_demangle(name, NULL, NULL, &status);
+        char* demangled = Demangle::demangle(name, _style & STYLE_SIGNATURES);
         if (demangled != NULL) {
             if (lib_name != NULL) {
                 _str.assign(lib_name).append("`").append(demangled);
@@ -164,6 +152,15 @@ const char* FrameName::typeSuffix(FrameTypeId type) {
 }
 
 void FrameName::javaMethodName(jmethodID method) {
+    if (VMStructs::hasMethodStructs()) {
+        // Workaround for JDK-8313816
+        VMMethod* vm_method = VMMethod::fromMethodID(method);
+        if (vm_method == NULL || vm_method->id() == NULL) {
+            _str.assign("[stale_jmethodID]");
+            return;
+        }
+    }
+
     jclass method_class;
     char* class_name = NULL;
     char* method_name = NULL;
@@ -222,6 +219,18 @@ void FrameName::javaClassName(const char* symbol, size_t length, int style) {
         do {
             _str += "[]";
         } while (--array_dimension > 0);
+    }
+
+    if (style & STYLE_NORMALIZE) {
+        size_t size = _str.size();
+        for (ssize_t i = size - 2; i > 0; i--) {
+            if (_str[i] == '/' || _str[i] == '.') {
+                if (isDigit(_str[i + 1])) {
+                    _str.resize(i);
+                }
+                break;
+            }
+        }
     }
 
     if (style & STYLE_SIMPLE) {
@@ -304,6 +313,41 @@ const char* FrameName::name(ASGCT_CallFrame& frame, bool for_matching) {
     }
 }
 
+FrameTypeId FrameName::type(ASGCT_CallFrame& frame) {
+    if (frame.method_id == NULL) {
+        return FRAME_NATIVE;
+    }
+
+    switch (frame.bci) {
+        case BCI_NATIVE_FRAME: {
+            const char* name = (const char*)frame.method_id;
+            if ((name[0] == '_' && name[1] == 'Z') ||
+                (name[0] == '+' && name[1] == '[') ||
+                (name[0] == '-' && name[1] == '[')) {
+                return FRAME_CPP;
+            } else {
+                size_t len = strlen(name);
+                return len > 4 && strcmp(name + len - 4, "_[k]") == 0 ? FRAME_KERNEL : FRAME_NATIVE;
+            }
+        }
+
+        case BCI_ALLOC:
+        case BCI_LOCK:
+        case BCI_PARK:
+            return FRAME_INLINED;
+
+        case BCI_ALLOC_OUTSIDE_TLAB:
+            return FRAME_KERNEL;
+
+        case BCI_THREAD_ID:
+        case BCI_ERROR:
+            return FRAME_NATIVE;
+
+        default:
+            return FrameType::decode(frame.bci);
+    }
+}
+
 bool FrameName::include(const char* frame_name) {
     for (int i = 0; i < _include.size(); i++) {
         if (_include[i].matches(frame_name)) {
@@ -321,4 +365,3 @@ bool FrameName::exclude(const char* frame_name) {
     }
     return false;
 }
-

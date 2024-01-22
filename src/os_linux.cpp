@@ -1,17 +1,6 @@
 /*
- * Copyright 2018 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #ifdef __linux__
@@ -138,7 +127,7 @@ u64 OS::processStartTime() {
 
     if (start_time == 0) {
         char buf[64];
-        sprintf(buf, "/proc/%d", processId());
+        snprintf(buf, sizeof(buf), "/proc/%d", processId());
 
         struct stat st;
         if (stat(buf, &st) == 0) {
@@ -193,7 +182,7 @@ const char* OS::schedPolicy(int thread_id) {
 
 bool OS::threadName(int thread_id, char* name_buf, size_t name_len) {
     char buf[64];
-    sprintf(buf, "/proc/self/task/%d/comm", thread_id);
+    snprintf(buf, sizeof(buf), "/proc/self/task/%d/comm", thread_id);
     int fd = open(buf, O_RDONLY);
     if (fd == -1) {
         return false;
@@ -211,13 +200,13 @@ bool OS::threadName(int thread_id, char* name_buf, size_t name_len) {
 
 ThreadState OS::threadState(int thread_id) {
     char buf[512];
-    sprintf(buf, "/proc/self/task/%d/stat", thread_id);
+    snprintf(buf, sizeof(buf), "/proc/self/task/%d/stat", thread_id);
     int fd = open(buf, O_RDONLY);
     if (fd == -1) {
-        return THREAD_INVALID;
+        return THREAD_UNKNOWN;
     }
 
-    ThreadState state = THREAD_INVALID;
+    ThreadState state = THREAD_UNKNOWN;
     if (read(fd, buf, sizeof(buf)) > 0) {
         char* s = strchr(buf, ')');
         state = s != NULL && (s[2] == 'R' || s[2] == 'D') ? THREAD_RUNNING : THREAD_SLEEPING;
@@ -299,6 +288,10 @@ bool OS::getCpuDescription(char* buf, size_t size) {
 
     *buf = 0;
     return true;
+}
+
+int OS::getCpuCount() {
+    return sysconf(_SC_NPROCESSORS_ONLN);
 }
 
 u64 OS::getProcessCpuTime(u64* utime, u64* stime) {

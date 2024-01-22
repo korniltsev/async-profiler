@@ -4,7 +4,7 @@ This project is a low overhead sampling profiler for Java
 that does not suffer from [Safepoint bias problem](http://psy-lob-saw.blogspot.ru/2016/02/why-most-sampling-java-profilers-are.html).
 It features HotSpot-specific APIs to collect stack traces
 and to track memory allocations. The profiler works with
-OpenJDK, Oracle JDK and other Java runtimes based on the HotSpot JVM.
+OpenJDK and other Java runtimes based on the HotSpot JVM.
 
 async-profiler can trace the following kinds of events:
  - CPU cycles
@@ -12,36 +12,31 @@ async-profiler can trace the following kinds of events:
  - Allocations in Java Heap
  - Contented lock attempts, including both Java object monitors and ReentrantLocks
 
-See our [Wiki](https://github.com/jvm-profiling-tools/async-profiler/wiki) or
+See our [Wiki](https://github.com/async-profiler/async-profiler/wiki) or
 [3 hours playlist](https://www.youtube.com/playlist?list=PLNCLTEx3B8h4Yo_WvKWdLvI9mj1XpTKBr)
 to learn about all features. 
 
 ## Download
 
-Current release (2.9):
+Current release (3.0):
 
- - Linux x64 (glibc): [async-profiler-2.9-linux-x64.tar.gz](https://github.com/jvm-profiling-tools/async-profiler/releases/download/v2.9/async-profiler-2.9-linux-x64.tar.gz)
- - Linux x64 (musl): [async-profiler-2.9-linux-musl-x64.tar.gz](https://github.com/jvm-profiling-tools/async-profiler/releases/download/v2.9/async-profiler-2.9-linux-musl-x64.tar.gz)
- - Linux arm64: [async-profiler-2.9-linux-arm64.tar.gz](https://github.com/jvm-profiling-tools/async-profiler/releases/download/v2.9/async-profiler-2.9-linux-arm64.tar.gz)
- - macOS x64/arm64: [async-profiler-2.9-macos.zip](https://github.com/jvm-profiling-tools/async-profiler/releases/download/v2.9/async-profiler-2.9-macos.zip)
- - Converters between profile formats: [converter.jar](https://github.com/jvm-profiling-tools/async-profiler/releases/download/v2.9/converter.jar)  
-   (JFR to Flame Graph, JFR to FlameScope, collapsed stacks to Flame Graph)
+ - Linux x64: [async-profiler-3.0-linux-x64.tar.gz](https://github.com/async-profiler/async-profiler/releases/download/v3.0/async-profiler-3.0-linux-x64.tar.gz)
+ - Linux arm64: [async-profiler-3.0-linux-arm64.tar.gz](https://github.com/async-profiler/async-profiler/releases/download/v3.0/async-profiler-3.0-linux-arm64.tar.gz)
+ - macOS x64/arm64: [async-profiler-3.0-macos.zip](https://github.com/async-profiler/async-profiler/releases/download/v3.0/async-profiler-3.0-macos.zip)
+ - Converters between profile formats: [converter.jar](https://github.com/async-profiler/async-profiler/releases/download/v3.0/converter.jar)  
+   (JFR to Flame Graph, JFR to pprof, collapsed stacks to Flame Graph)
 
-[Previous releases](https://github.com/jvm-profiling-tools/async-profiler/releases)
+[Previous releases](https://github.com/async-profiler/async-profiler/releases)
 
-Note: async-profiler also comes bundled with IntelliJ IDEA Ultimate 2018.3 and later.
+async-profiler also comes bundled with IntelliJ IDEA Ultimate 2018.3 and later.  
 For more information refer to [IntelliJ IDEA documentation](https://www.jetbrains.com/help/idea/cpu-and-allocation-profiling-basic-concepts.html).
 
 ## Supported platforms
 
- - **Linux** / x64 / x86 / arm64 / arm32 / ppc64le
- - **macOS** / x64 / arm64
-
-### Community supported builds
-
- - **Windows** / x64 - <img src="https://upload.wikimedia.org/wikipedia/commons/9/9c/IntelliJ_IDEA_Icon.svg" width="16" height="16"/> [IntelliJ IDEA](https://www.jetbrains.com/idea/) 2021.2 and later
- - [**ap-loader**](https://github.com/jvm-profiling-tools/ap-loader) -
-   all-in-one JAR for using async-profiler in Java programs and as a CLI tool
+|           | Officially maintained builds | Other available ports                     |
+|-----------|------------------------------|-------------------------------------------|
+| **Linux** | x64, arm64                   | x86, arm32, ppc64le, riscv64, loongarch64 |
+| **macOS** | x64, arm64                   |                                           |
 
 ## CPU profiling
 
@@ -58,26 +53,23 @@ where `AsyncGetCallTrace` fails.
 This approach has the following advantages compared to using `perf_events`
 directly with a Java agent that translates addresses to Java method names:
 
-* Works on older Java versions because it doesn't require
-  `-XX:+PreserveFramePointer`, which is only available in JDK 8u60 and later.
+* Does not require `-XX:+PreserveFramePointer`, which introduces
+  performance overhead that can be sometimes as high as 10%.
 
-* Does not introduce the performance overhead from `-XX:+PreserveFramePointer`,
-  which can in rare cases be as high as 10%.
+* Does not require generating a map file for translating Java code addresses
+  to method names.
 
-* Does not require generating a map file to map Java code addresses to method
-  names.
+* Displays interpreter frames.
 
-* Works with interpreter frames.
-
-* Does not require writing out a perf.data file for further processing in
+* Does not produce large intermediate files (perf.data) for further processing in
   user space scripts.
 
 If you wish to resolve frames within `libjvm`, the [debug symbols](#installing-debug-symbols) are required.
 
 ## ALLOCATION profiling
 
-Instead of detecting CPU-consuming code, the profiler can be configured
-to collect call sites where the largest amount of heap memory is allocated.
+The profiler can be configured to collect call sites where the largest amount
+of heap memory is allocated.
 
 async-profiler does not use intrusive techniques like bytecode instrumentation
 or expensive DTrace probes which have significant performance impact.
@@ -86,34 +78,24 @@ like allocation elimination. Only actual heap allocations are measured.
 
 The profiler features TLAB-driven sampling. It relies on HotSpot-specific
 callbacks to receive two kinds of notifications:
- - when an object is allocated in a newly created TLAB (aqua frames in a Flame Graph);
- - when an object is allocated on a slow path outside TLAB (brown frames).
-
-This means not each allocation is counted, but only allocations every _N_ kB,
-where _N_ is the average size of TLAB. This makes heap sampling very cheap
-and suitable for production. On the other hand, the collected data
-may be incomplete, though in practice it will often reflect the top allocation
-sources.
+ - when an object is allocated in a newly created TLAB;
+ - when an object is allocated on a slow path outside TLAB.
 
 Sampling interval can be adjusted with `--alloc` option.
 For example, `--alloc 500k` will take one sample after 500 KB of allocated
-space on average. However, intervals less than TLAB size will not take effect.
-
-The minimum supported JDK version is 7u40 where the TLAB callbacks appeared.
+space on average. Prior to JDK 11, intervals less than TLAB size will not take effect.
 
 ### Installing Debug Symbols
 
-The allocation profiler requires HotSpot debug symbols. Oracle JDK already has them
-embedded in `libjvm.so`, but in OpenJDK builds they are typically shipped
-in a separate package. For example, to install OpenJDK debug symbols on
-Debian / Ubuntu, run:
+Prior to JDK 11, the allocation profiler required HotSpot debug symbols.
+Some OpenJDK distributions (Amazon Corretto, Liberica JDK, Azul Zulu)
+already have them embedded in `libjvm.so`, other OpenJDK builds typically
+provide debug symbols in a separate package. For example, to install
+OpenJDK debug symbols on Debian / Ubuntu, run:
 ```
-# apt install openjdk-8-dbg
+# apt install openjdk-17-dbg
 ```
-or for OpenJDK 11:
-```
-# apt install openjdk-11-dbg
-```
+(replace `17` with the desired version of JDK).
 
 On CentOS, RHEL and some other RPM-based distributions, this could be done with
 [debuginfo-install](http://man7.org/linux/man-pages/man1/debuginfo-install.1.html) utility:
@@ -124,8 +106,8 @@ On CentOS, RHEL and some other RPM-based distributions, this could be done with
 On Gentoo the `icedtea` OpenJDK package can be built with the per-package setting
 `FEATURES="nostrip"` to retain symbols.
 
-The `gdb` tool can be used to verify if the debug symbols are properly installed for the `libjvm` library.
-For example on Linux:
+The `gdb` tool can be used to verify if debug symbols are properly installed for the `libjvm` library.
+For example, on Linux:
 ```
 $ gdb $JAVA_HOME/lib/server/libjvm.so -ex 'info address UseG1GC'
 ```
@@ -140,7 +122,7 @@ For instance, this can be helpful when profiling application start-up time.
 
 Wall-clock profiler is most useful in per-thread mode: `-t`.
 
-Example: `./profiler.sh -e wall -t -i 5ms -f result.html 8983`
+Example: `asprof -e wall -t -i 5ms -f result.html 8983`
 
 ## Java method profiling
 
@@ -160,20 +142,17 @@ of all compiled methods. The subsequent instrumentation flushes only the _depend
 The massive CodeCache flush doesn't occur if attaching async-profiler as an agent.
 
 Here are some useful native methods that you may want to profile:
-* ```G1CollectedHeap::humongous_obj_allocate``` - trace the _humongous allocation_ of the G1 GC,
-* ```JVM_StartThread``` - trace the new thread creation,
+* ```G1CollectedHeap::humongous_obj_allocate``` - trace _humongous allocations_ of the G1 GC,
+* ```JVM_StartThread``` - trace creation of new Java threads,
 * ```Java_java_lang_ClassLoader_defineClass1``` - trace class loading.
 
 ## Building
 
-Build status: [![Build Status](https://github.com/jvm-profiling-tools/async-profiler/actions/workflows/cpp.yml/badge.svg?branch=master)](https://github.com/jvm-profiling-tools/async-profiler/actions/workflows/cpp.yml)
+Build status: [![Build Status](https://github.com/async-profiler/async-profiler/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/async-profiler/async-profiler/actions/workflows/ci.yml)
 
 Make sure the `JAVA_HOME` environment variable points to your JDK installation,
-and then run `make`. GCC is required. After building, the profiler agent binary
-will be in the `build` subdirectory. Additionally, a small application `jattach`
-that can load the agent into the target process will also be compiled to the
-`build` subdirectory. If the build fails due to
-`Source option 7 is no longer supported. Use 8 or later.`, use `make JAVA_TARGET=8`.
+and then run `make`. GCC or Clang is required. After building, the profiler binaries
+will be in the `build` subdirectory.
 
 ## Basic Usage
 
@@ -186,11 +165,14 @@ sysctl or as follows:
 # sysctl kernel.kptr_restrict=0
 ```
 
-To run the agent and pass commands to it, the helper script `profiler.sh`
-is provided. A typical workflow would be to launch your Java application,
-attach the agent and start profiling, exercise your performance scenario, and
+async-profiler works in the context of the target Java application,
+i.e. it runs as an agent in the process being profiled.
+`asprof` is a tool to attach and control the agent. 
+
+A typical workflow would be to launch your Java application, attach
+the agent and start profiling, exercise your performance scenario, and
 then stop profiling. The agent's output, including the profiling results, will
-be displayed in the Java application's standard output.
+be displayed on the console where you've started `asprof`.
 
 Example:
 
@@ -198,8 +180,8 @@ Example:
 $ jps
 9234 Jps
 8983 Computey
-$ ./profiler.sh start 8983
-$ ./profiler.sh stop 8983
+$ asprof start 8983
+$ asprof stop 8983
 ```
 
 The following may be used in lieu of the `pid` (8983):
@@ -211,7 +193,7 @@ Alternatively, you may specify `-d` (duration) argument to profile
 the application for a fixed period of time with a single command.
 
 ```
-$ ./profiler.sh -d 30 8983
+$ asprof -d 30 8983
 ```
 
 By default, the profiling frequency is 100Hz (every 10ms of CPU time).
@@ -244,7 +226,7 @@ call stack leading to it comes from `Primes.primesThread`.
 
 ## Launching as an Agent
 
-If you need to profile some code as soon as the JVM starts up, instead of using the `profiler.sh` script,
+If you need to profile some code as soon as the JVM starts up, instead of using the `asprof`,
 it is possible to attach async-profiler as an agent on the command line. For example:
 
 ```
@@ -253,19 +235,19 @@ $ java -agentpath:/path/to/libasyncProfiler.so=start,event=cpu,file=profile.html
 
 Agent library is configured through the JVMTI argument interface.
 The format of the arguments string is described
-[in the source code](https://github.com/jvm-profiling-tools/async-profiler/blob/v2.9/src/arguments.cpp#L52).
-The `profiler.sh` script actually converts command line arguments to that format.
+[in the source code](https://github.com/async-profiler/async-profiler/blob/v3.0/src/arguments.cpp#L44).
+`asprof` actually converts command line arguments to that format.
 
 For instance, `-e wall` is converted to `event=wall`, `-f profile.html`
 is converted to `file=profile.html`, and so on. However, some arguments are processed
-directly by `profiler.sh` script. E.g. `-d 5` results in 3 actions:
+directly by `asprof`. E.g. `-d 5` results in 3 actions:
 attaching profiler agent with start command, sleeping for 5 seconds,
 and then attaching the agent again with stop command.
 
 ## Multiple events
 
 It is possible to profile CPU, allocations, and locks at the same time.
-Or, instead of CPU, you may choose any other execution event: wall-clock,
+Instead of CPU, you may choose any other execution event: wall-clock,
 perf event, tracepoint, Java method, etc.
 
 The only output format that supports multiple events together is JFR.
@@ -278,11 +260,11 @@ The recording will contain the following event types:
 
 To start profiling cpu + allocations + locks together, specify
 ```
-./profiler.sh -e cpu,alloc,lock -f profile.jfr ...
+asprof -e cpu,alloc,lock -f profile.jfr ...
 ```
 or use `--alloc` and `--lock` parameters with the desired threshold:
 ```
-./profiler.sh -e cpu --alloc 2m --lock 10ms -f profile.jfr ...
+asprof -e cpu --alloc 2m --lock 10ms -f profile.jfr ...
 ```
 The same, when starting profiler as an agent:
 ```
@@ -299,15 +281,14 @@ Also, Flame Graph output format will be chosen automatically if the target filen
 $ jps
 9234 Jps
 8983 Computey
-$ ./profiler.sh -d 30 -f /tmp/flamegraph.html 8983
+$ asprof -d 30 -f /tmp/flamegraph.html 8983
 ```
 
-[![Example](https://github.com/jvm-profiling-tools/async-profiler/blob/master/demo/flamegraph.png)](https://htmlpreview.github.io/?https://github.com/jvm-profiling-tools/async-profiler/blob/master/demo/flamegraph.html)
+[![Example](https://github.com/async-profiler/async-profiler/blob/master/demo/flamegraph.png)](https://htmlpreview.github.io/?https://github.com/async-profiler/async-profiler/blob/master/demo/flamegraph.html)
 
 ## Profiler Options
 
-The following is a complete list of the command-line options accepted by
-`profiler.sh` script.
+`asprof` command-line options.
 
 * `start` - starts profiling in semi-automatic mode, i.e. profiler will run
   until `stop` command is explicitly called.
@@ -333,7 +314,7 @@ The following is a complete list of the command-line options accepted by
 * `-d N` - the profiling duration, in seconds. If no `start`, `resume`, `stop`
   or `status` option is given, the profiler will run for the specified period
   of time and then automatically stop.  
-  Example: `./profiler.sh -d 30 8983`
+  Example: `asprof -d 30 8983`
 
 * `-e event` - the profiling event: `cpu`, `alloc`, `lock`, `cache-misses` etc.
   Use `list` to see the complete list of available events.
@@ -359,7 +340,7 @@ The following is a complete list of the command-line options accepted by
   if N is followed by `ms` (for milliseconds), `us` (for microseconds),
   or `s` (for seconds). Only CPU active time is counted. No samples
   are collected while CPU is idle. The default is 10000000 (10ms).  
-  Example: `./profiler.sh -i 500us 8983`
+  Example: `asprof -i 500us 8983`
 
 * `--alloc N` - allocation profiling interval in bytes or in other units,
   if N is followed by `k` (kilobytes), `m` (megabytes), or `g` (gigabytes).
@@ -374,13 +355,15 @@ The following is a complete list of the command-line options accepted by
 
 * `-j N` - sets the Java stack profiling depth. This option will be ignored if N is greater
   than default 2048.  
-  Example: `./profiler.sh -j 30 8983`
+  Example: `asprof -j 30 8983`
 
 * `-t` - profile threads separately. Each stack trace will end with a frame
   that denotes a single thread.  
-  Example: `./profiler.sh -t 8983`
+  Example: `asprof -t 8983`
 
 * `-s` - print simple class names instead of FQN.
+
+* `-n` - normalize names of hidden classes / lambdas.
 
 * `-g` - print method signatures.
 
@@ -407,31 +390,42 @@ The following is a complete list of the command-line options accepted by
   e.g. total allocation size.
 
 * `--chunksize N`, `--chunktime N` - approximate size and time limits for a single JFR chunk.
-  Example: `./profiler.sh -f profile.jfr --chunksize 100m --chunktime 1h 8983`
+  A new chunk will be started whenever either limit is reached.
+  The default `chunksize` is 100MB, and the default `chunktime` is 1 hour.  
+  Example: `asprof -f profile.jfr --chunksize 100m --chunktime 1h 8983`
 
 * `-I include`, `-X exclude` - filter stack traces by the given pattern(s).
   `-I` defines the name pattern that *must* be present in the stack traces,
   while `-X` is the pattern that *must not* occur in any of stack traces in the output.
   `-I` and `-X` options can be specified multiple times. A pattern may begin or end with
   a star `*` that denotes any (possibly empty) sequence of characters.  
-  Example: `./profiler.sh -I 'Primes.*' -I 'java/*' -X '*Unsafe.park*' 8983`
+  Example: `asprof -I 'Primes.*' -I 'java/*' -X '*Unsafe.park*' 8983`
+
+* `-L level` - log level: `debug`, `info`, `warn`, `error` or `none`.
+
+* `-F features` - comma separated list of HotSpot-specific features
+  to include in stack traces. Supported features are:
+  - `vtable` - display targets of megamorphic virtual calls as an extra frame
+    on top of `vtable stub` or `itable stub`.
+  - `comptask` - display current compilation task (a Java method being compiled)
+    in a JIT compiler stack trace.
 
 * `--title TITLE`, `--minwidth PERCENT`, `--reverse` - FlameGraph parameters.  
-  Example: `./profiler.sh -f profile.html --title "Sample CPU profile" --minwidth 0.5 8983`
+  Example: `asprof -f profile.html --title "Sample CPU profile" --minwidth 0.5 8983`
 
 * `-f FILENAME` - the file name to dump the profile information to.  
   `%p` in the file name is expanded to the PID of the target JVM;  
   `%t` - to the timestamp;  
   `%n{MAX}` - to the sequence number;  
   `%{ENV}` - to the value of the given environment variable.  
-  Example: `./profiler.sh -o collapsed -f /tmp/traces-%t.txt 8983`
+  Example: `asprof -o collapsed -f /tmp/traces-%t.txt 8983`
 
 * `--loop TIME` - run profiler in a loop (continuous profiling).
   The argument is either a clock time (`hh:mm:ss`) or
   a loop duration in `s`econds, `m`inutes, `h`ours, or `d`ays.
   Make sure the filename includes a timestamp pattern, or the output
   will be overwritten on each iteration.  
-  Example: `./profiler.sh --loop 1h -f /var/log/profile-%t.jfr 8983`
+  Example: `asprof --loop 1h -f /var/log/profile-%t.jfr 8983`
 
 * `--all-user` - include only user-mode events. This option is helpful when kernel profiling
   is restricted by `perf_event_paranoid` settings.  
@@ -441,10 +435,16 @@ The following is a complete list of the command-line options accepted by
 * `--cstack MODE` - how to walk native frames (C stack). Possible modes are
   `fp` (Frame Pointer), `dwarf` (DWARF unwind info),
   `lbr` (Last Branch Record, available on Haswell since Linux 4.1),
-  and `no` (do not collect C stack).
+  `vm` (HotSpot VM Structs) and `no` (do not collect C stack).
 
-  By default, C stack is shown in cpu, itimer, wall-clock and perf-events profiles.
+  By default, C stack is shown in cpu, ctimer, wall-clock and perf-events profiles.
   Java-level events like `alloc` and `lock` collect only Java stack.
+
+* `--signal NUM` - use alternative signal for cpu or wall clock profiling.
+  To change both signals, specify two numbers separated by a slash: `--signal SIGCPU/SIGWALL`.
+
+* `--clock SOURCE` - clock source for JFR timestamps: `tsc` (default)
+  or `monotonic` (equivalent for `CLOCK_MONOTONIC`).
 
 * `--begin function`, `--end function` - automatically start/stop profiling
   when the specified native function is executed.
@@ -460,13 +460,14 @@ The following is a complete list of the command-line options accepted by
   synchronously with the profiler. The output .jfr file will include all regular
   JFR events, except that execution samples will be obtained from async-profiler.
   This option implies `-o jfr`.
-    - `CONFIG` is a predefined JFR profile or a JFR configuration file (.jfc).
+    - `CONFIG` is a predefined JFR profile or a JFR configuration file (.jfc)
+               or a list of JFR events started with `+`
 
-  Example: `./profiler.sh -e cpu --jfrsync profile -f combined.jfr 8983`
+  Example: `asprof -e cpu --jfrsync profile -f combined.jfr 8983`
 
-* `--fdtransfer` - runs "fdtransfer" alongside, which is a small program providing an interface
-  for the profiler to access `perf_event_open` even while this syscall is unavailable for the
-  profiled process (due to low privileges).
+* `--fdtransfer` - runs a background process that provides access to perf_events
+  to an unprivileged process. `--fdtransfer` is useful for profiling a process
+  in a container (which lacks access to perf_events) from the host.
   See [Profiling Java in a container](#profiling-java-in-a-container).
 
 * `-v`, `--version` - prints the version of profiler library. If PID is specified,
@@ -493,7 +494,7 @@ syscall. There are 3 alternatives to allow profiling in a container:
 or disable it altogether with `--security-opt seccomp=unconfined` option. In
 addition, `--cap-add SYS_ADMIN` may be required.
 2. You can use "fdtransfer": see the help for `--fdtransfer`.
-3. Last, you may fall back to `-e itimer` profiling mode, see [Troubleshooting](#troubleshooting).
+3. Last, you may fall back to `-e ctimer` profiling mode, see [Troubleshooting](#troubleshooting).
 
 ## Restrictions/Limitations
 
@@ -510,23 +511,20 @@ addition, `--cap-add SYS_ADMIN` may be required.
   Otherwise the message _"perf_event mmap failed: Operation not permitted"_
   will be printed, and no native stack traces will be collected.
 
-* There is no bullet-proof guarantee that the `perf_events` overflow signal
-  is delivered to the Java thread in a way that guarantees no other code has run,
-  which means that in some rare cases, the captured Java stack might not match
-  the captured native (user+kernel) stack.
-
 * You will not see the non-Java frames _preceding_ the Java frames on the
-  stack. For example, if `start_thread` called `JavaMain` and then your Java
+  stack, unless `--cstack vm` is specified.
+  For example, if `start_thread` called `JavaMain` and then your Java
   code started running, you will not see the first two frames in the resulting
   stack. On the other hand, you _will_ see non-Java frames (user and kernel)
   invoked by your Java code.
 
 * No Java stacks will be collected if `-XX:MaxJavaStackTraceDepth` is zero
-  or negative.
+  or negative. The exception is `--cstack vm` mode, which does not take
+  `MaxJavaStackTraceDepth` into account.
 
 * Too short profiling interval may cause continuous interruption of heavy
   system calls like `clone()`, so that it will never complete;
-  see [#97](https://github.com/jvm-profiling-tools/async-profiler/issues/97).
+  see [#97](https://github.com/async-profiler/async-profiler/issues/97).
   The workaround is simply to increase the interval.
 
 * When agent is not loaded at JVM startup (by using -agentpath option) it is
@@ -571,11 +569,11 @@ Usually this happens in one of the following cases:
    a thread dump and heap info in its console.
 
 ```
-Failed to inject profiler into <pid>
+Target JVM failed to load libasyncProfiler.so
 ```
 The connection with the target JVM has been established, but JVM is unable to load profiler shared library.
 Make sure the user of JVM process has permissions to access `libasyncProfiler.so` by exactly the same absolute path.
-For more information see [#78](https://github.com/jvm-profiling-tools/async-profiler/issues/78).
+For more information see [#78](https://github.com/async-profiler/async-profiler/issues/78).
 
 ```
 No access to perf events. Try --fdtransfer or --all-user option or 'sysctl kernel.perf_event_paranoid=1'
@@ -593,10 +591,10 @@ Typical reasons include:
 4. perf_event_open API is not supported on this system, e.g. WSL.
 
 For permissions-related reasons (such as 1 and 2), using `--fdtransfer` while running the profiler
-as a privileged user will allow using perf_events.
+as a privileged user may solve the issue.
 
 If changing the configuration is not possible, you may fall back to
-`-e itimer` profiling mode. It is similar to `cpu` mode, but does not
+`-e ctimer` profiling mode. It is similar to `cpu` mode, but does not
 require perf_events support. As a drawback, there will be no kernel
 stack traces.
 
@@ -618,7 +616,7 @@ VMStructs unavailable. Unsupported JVM?
 JVM shared library does not export `gHotSpotVMStructs*` symbols -
 apparently this is not a HotSpot JVM. Sometimes the same message
 can be also caused by an incorrectly built JDK
-(see [#218](https://github.com/jvm-profiling-tools/async-profiler/issues/218)).
+(see [#218](https://github.com/async-profiler/async-profiler/issues/218)).
 In these cases installing JDK debug symbols may solve the problem.
 
 ```

@@ -1,17 +1,6 @@
 /*
- * Copyright 2017 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #ifndef _STACKFRAME_H
@@ -21,6 +10,8 @@
 #include <ucontext.h>
 #include "arch.h"
 
+
+class NMethod;
 
 class StackFrame {
   private:
@@ -54,15 +45,31 @@ class StackFrame {
     uintptr_t& fp();
 
     uintptr_t& retval();
+    uintptr_t link();
     uintptr_t arg0();
     uintptr_t arg1();
     uintptr_t arg2();
     uintptr_t arg3();
+    uintptr_t jarg0();
+    uintptr_t method();
+    uintptr_t senderSP();
 
     void ret();
 
-    bool popStub(instruction_t* entry, const char* name);
-    bool popMethod(instruction_t* entry);
+    bool unwindStub(instruction_t* entry, const char* name) {
+        return unwindStub(entry, name, pc(), sp(), fp());
+    }
+
+    bool unwindCompiled(NMethod* nm) {
+        return unwindCompiled(nm, pc(), sp(), fp());
+    }
+
+    bool unwindStub(instruction_t* entry, const char* name, uintptr_t& pc, uintptr_t& sp, uintptr_t& fp);
+    bool unwindCompiled(NMethod* nm, uintptr_t& pc, uintptr_t& sp, uintptr_t& fp);
+
+    void adjustSP(const void* entry, const void* pc, uintptr_t& sp);
+
+    bool skipFaultInstruction();
 
     bool checkInterruptedSyscall();
 

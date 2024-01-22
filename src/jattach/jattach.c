@@ -1,17 +1,6 @@
 /*
- * Copyright 2021 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The jattach authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <stdio.h>
@@ -22,12 +11,14 @@
 
 
 extern int is_openj9_process(int pid);
-extern int jattach_openj9(int pid, int nspid, int argc, char** argv);
-extern int jattach_hotspot(int pid, int nspid, int argc, char** argv);
+extern int jattach_openj9(int pid, int nspid, int argc, char** argv, int print_output);
+extern int jattach_hotspot(int pid, int nspid, int argc, char** argv, int print_output);
+
+int mnt_changed = 0;
 
 
 __attribute__((visibility("default")))
-int jattach(int pid, int argc, char** argv) {
+int jattach(int pid, int argc, char** argv, int print_output) {
     uid_t my_uid = geteuid();
     gid_t my_gid = getegid();
     uid_t target_uid = my_uid;
@@ -42,7 +33,7 @@ int jattach(int pid, int argc, char** argv) {
     // Network and IPC namespaces are essential for OpenJ9 connection.
     enter_ns(pid, "net");
     enter_ns(pid, "ipc");
-    int mnt_changed = enter_ns(pid, "mnt");
+    mnt_changed = enter_ns(pid, "mnt");
 
     // In HotSpot, dynamic attach is allowed only for the clients with the same euid/egid.
     // If we are running under root, switch to the required euid/egid automatically.
@@ -58,9 +49,9 @@ int jattach(int pid, int argc, char** argv) {
     signal(SIGPIPE, SIG_IGN);
 
     if (is_openj9_process(nspid)) {
-        return jattach_openj9(pid, nspid, argc, argv);
+        return jattach_openj9(pid, nspid, argc, argv, print_output);
     } else {
-        return jattach_hotspot(pid, nspid, argc, argv);
+        return jattach_hotspot(pid, nspid, argc, argv, print_output);
     }
 }
 
@@ -69,7 +60,6 @@ int jattach(int pid, int argc, char** argv) {
 int main(int argc, char** argv) {
     if (argc < 3) {
         printf("jattach " JATTACH_VERSION " built on " __DATE__ "\n"
-               "Copyright 2021 Andrei Pangin\n"
                "\n"
                "Usage: jattach <pid> <cmd> [args ...]\n"
                "\n"
@@ -86,7 +76,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    return jattach(pid, argc - 2, argv + 2);
+    return jattach(pid, argc - 2, argv + 2, 1);
 }
 
 #endif // JATTACH_VERSION

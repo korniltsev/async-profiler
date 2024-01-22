@@ -1,17 +1,6 @@
 /*
- * Copyright 2020 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #ifndef _JFRMETADATA_H
@@ -46,9 +35,11 @@ enum JfrType {
     T_STACK_TRACE = 26,
     T_STACK_FRAME = 27,
     T_METHOD = 28,
-    T_PACKAGE = 29,
-    T_SYMBOL = 30,
-    T_LOG_LEVEL = 31,
+    T_VIRTUAL_SPACE = 29,
+    T_PACKAGE = 30,
+    T_SYMBOL = 31,
+    T_GC_WHEN = 32,
+    T_LOG_LEVEL = 33,
 
     T_EVENT = 100,
     T_EXECUTION_SAMPLE = 101,
@@ -64,18 +55,23 @@ enum JfrType {
     T_JVM_INFORMATION = 111,
     T_INITIAL_SYSTEM_PROPERTY = 112,
     T_NATIVE_LIBRARY = 113,
-    T_LOG = 114,
-    T_LIVE_OBJECT = 115,
+    T_GC_HEAP_SUMMARY = 114,
+    T_LOG = 115,
+    T_WINDOW = 116,
+    T_LIVE_OBJECT = 117,
 
     T_ANNOTATION = 200,
     T_LABEL = 201,
     T_CATEGORY = 202,
-    T_TIMESTAMP = 203,
-    T_TIMESPAN = 204,
-    T_DATA_AMOUNT = 205,
-    T_MEMORY_ADDRESS = 206,
-    T_UNSIGNED = 207,
-    T_PERCENTAGE = 208,
+    T_CONTENT_TYPE = 203,
+    T_FIRST_CONTENT_TYPE = 204,
+    T_TIMESTAMP = 204,
+    T_TIMESPAN = 205,
+    T_DATA_AMOUNT = 206,
+    T_MEMORY_ADDRESS = 207,
+    T_UNSIGNED = 208,
+    T_PERCENTAGE = 209,
+    T_LAST_CONTENT_TYPE = 209,
 };
 
 
@@ -118,7 +114,7 @@ class Element {
 
     Element& attribute(const char* key, JfrType value) {
         char value_str[16];
-        sprintf(value_str, "%d", value);
+        snprintf(value_str, sizeof(value_str), "%d", value);
         return attribute(key, value_str);
     }
 
@@ -163,6 +159,9 @@ class JfrMetadata : Element {
         }
         if (label != NULL) {
             e << annotation(T_LABEL, label);
+        }
+        if (id >= T_FIRST_CONTENT_TYPE && id <= T_LAST_CONTENT_TYPE) {
+            e << annotation(T_CONTENT_TYPE);
         }
         return e;
     }
@@ -211,11 +210,14 @@ class JfrMetadata : Element {
         return e;
     }
 
-    static Element& category(const char* value0, const char* value1 = NULL) {
+    static Element& category(const char* value0, const char* value1 = NULL, const char* value2 = NULL) {
         Element& e = annotation(T_CATEGORY);
         e.attribute("value-0", value0);
         if (value1 != NULL) {
             e.attribute("value-1", value1);
+            if (value2 != NULL) {
+                e.attribute("value-2", value2);
+            }
         }
         return e;
     }

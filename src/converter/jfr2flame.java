@@ -1,17 +1,6 @@
 /*
- * Copyright 2020 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 import one.jfr.ClassRef;
@@ -23,7 +12,6 @@ import one.jfr.event.*;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Map;
 
 /**
  * Converts .jfr output produced by async-profiler to HTML Flame Graph.
@@ -34,35 +22,51 @@ public class jfr2flame {
 
     private final JfrReader jfr;
     private final Arguments args;
-    private final Dictionary<String> methodNames = new Dictionary<>();
 
     public jfr2flame(JfrReader jfr, Arguments args) {
         this.jfr = jfr;
         this.args = args;
     }
 
-    public void convert(final FlameGraph fg) throws IOException {
-        EventAggregator agg = new EventAggregator(args.threads, args.total);
-
+    public void convert(FlameGraph fg) throws IOException {
         Class<? extends Event> eventClass =
                 args.live ? LiveObject.class :
                         args.alloc ? AllocationSample.class :
                                 args.lock ? ContendedLock.class : ExecutionSample.class;
-        int threadState = args.cpu ? getMapKey(jfr.threadStates, "STATE_RUNNABLE") : -1;
+
+        jfr.stopAtNewChunk = true;
+        while (!jfr.eof()) {
+            convertChunk(fg, eventClass);
+        }
+    }
+
+    public void convertChunk(final FlameGraph fg, Class<? extends Event> eventClass) throws IOException {
+        EventAggregator agg = new EventAggregator(args.threads, args.total);
+
+        long threadStates = 0;
+        if (args.state != null) {
+            for (String state : args.state.split(",")) {
+                int key = jfr.getEnumKey("jdk.types.ThreadState", "STATE_" + state.toUpperCase());
+                if (key >= 0) threadStates |= 1L << key;
+            }
+        }
 
         long startTicks = args.from != 0 ? toTicks(args.from) : Long.MIN_VALUE;
         long endTicks = args.to != 0 ? toTicks(args.to) : Long.MAX_VALUE;
 
         for (Event event; (event = jfr.readEvent(eventClass)) != null; ) {
             if (event.time >= startTicks && event.time <= endTicks) {
-                if (threadState < 0 || ((ExecutionSample) event).threadState == threadState) {
+                if (threadStates == 0 || (threadStates & (1L << ((ExecutionSample) event).threadState)) != 0) {
                     agg.collect(event);
                 }
             }
         }
 
+        final Dictionary<String> methodNames = new Dictionary<>();
+        final Classifier classifier = new Classifier(methodNames);
+
         final double ticksToNanos = 1e9 / jfr.ticksPerSec;
-        final boolean scale = args.total && eventClass == ContendedLock.class && ticksToNanos != 1.0;
+        final boolean scale = args.total && args.lock && ticksToNanos != 1.0;
 
         // Don't use lambda for faster startup
         agg.forEach(new EventAggregator.Visitor() {
@@ -75,7 +79,10 @@ public class jfr2flame {
                     byte[] types = stackTrace.types;
                     int[] locations = stackTrace.locations;
                     String classFrame = getClassFrame(event);
-                    String[] trace = new String[methods.length + (args.threads ? 1 : 0) + (classFrame != null ? 1 : 0)];
+                    String[] trace = new String[methods.length
+                            + (args.threads ? 1 : 0)
+                            + (args.classify ? 1 : 0)
+                            + (classFrame != null ? 1 : 0)];
                     if (args.threads) {
                         trace[0] = getThreadFrame(event.tid);
                     }
@@ -84,7 +91,7 @@ public class jfr2flame {
                         trace[--idx] = classFrame;
                     }
                     for (int i = 0; i < methods.length; i++) {
-                        String methodName = getMethodName(methods[i], types[i]);
+                        String methodName = getMethodName(methodNames, methods[i], types[i]);
                         int location;
                         if (args.lines && (location = locations[i] >>> 16) != 0) {
                             methodName += ":" + location;
@@ -92,6 +99,9 @@ public class jfr2flame {
                             methodName += "@" + location;
                         }
                         trace[--idx] = methodName + FRAME_SUFFIX[types[i]];
+                    }
+                    if (args.classify) {
+                        trace[--idx] = classifier.getCategoryName(stackTrace);
                     }
                     fg.addSample(trace, scale ? (long) (value * ticksToNanos) : value);
                 }
@@ -101,7 +111,8 @@ public class jfr2flame {
 
     private String getThreadFrame(int tid) {
         String threadName = jfr.threads.get(tid);
-        return threadName == null ? "[tid=" + tid + ']' : '[' + threadName + " tid=" + tid + ']';
+        return threadName == null ? "[tid=" + tid + ']' :
+                threadName.startsWith("[tid=") ? threadName : '[' + threadName + " tid=" + tid + ']';
     }
 
     private String getClassFrame(Event event) {
@@ -138,7 +149,7 @@ public class jfr2flame {
         return sb.append(suffix).toString();
     }
 
-    private String getMethodName(long methodId, byte methodType) {
+    private String getMethodName(Dictionary<String> methodNames, long methodId, byte methodType) {
         String result = methodNames.get(methodId);
         if (result != null) {
             return result;
@@ -157,7 +168,7 @@ public class jfr2flame {
             } else {
                 String classStr = toJavaClassName(className, 0, args.dot);
                 String methodStr = new String(methodName, StandardCharsets.UTF_8);
-                result = classStr + '.' + methodStr;
+                result = methodStr.isEmpty() ? classStr : classStr + '.' + methodStr;
             }
         }
 
@@ -166,8 +177,9 @@ public class jfr2flame {
     }
 
     private boolean isNativeFrame(byte methodType) {
-        return methodType >= FlameGraph.FRAME_NATIVE && methodType <= FlameGraph.FRAME_KERNEL
-                && jfr.frameTypes.size() > FlameGraph.FRAME_NATIVE + 1;
+        return methodType == FlameGraph.FRAME_NATIVE && jfr.getEnumValue("jdk.types.FrameType", FlameGraph.FRAME_KERNEL) != null
+                || methodType == FlameGraph.FRAME_CPP
+                || methodType == FlameGraph.FRAME_KERNEL;
     }
 
     private String toJavaClassName(byte[] symbol, int start, boolean dotted) {
@@ -196,6 +208,22 @@ public class jfr2flame {
             }
         }
 
+        if (args.norm) {
+            for (int i = end - 2; i > start; i--) {
+                if (symbol[i] == '/' || symbol[i] == '.') {
+                    if (symbol[i + 1] >= '0' && symbol[i + 1] <= '9') {
+                        end = i;
+                        if (i > start + 19 && symbol[i - 19] == '+' && symbol[i - 18] == '0') {
+                            // Original JFR transforms lambda names to something like
+                            // pkg.ClassName$$Lambda+0x00007f8177090218/543846639
+                            end = i - 19;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
         if (args.simple) {
             for (int i = end - 2; i >= start; i--) {
                 if (symbol[i] == '/' && (symbol[i + 1] < '0' || symbol[i + 1] > '9')) {
@@ -220,34 +248,27 @@ public class jfr2flame {
         return jfr.nanosToTicks(nanos);
     }
 
-    private static int getMapKey(Map<Integer, String> map, String value) {
-        for (Map.Entry<Integer, String> entry : map.entrySet()) {
-            if (value.equals(entry.getValue())) {
-                return entry.getKey();
-            }
-        }
-        return -1;
-    }
-
     public static void main(String[] cmdline) throws Exception {
         Arguments args = new Arguments(cmdline);
         if (args.input == null) {
             System.out.println("Usage: java " + jfr2flame.class.getName() + " [options] input.jfr [output.html]");
             System.out.println();
             System.out.println("options include all supported FlameGraph options, plus the following:");
-            System.out.println("  --cpu        CPU Flame Graph");
-            System.out.println("  --alloc      Allocation Flame Graph");
-            System.out.println("  --live       Include only live objects in allocation profile");
-            System.out.println("  --lock       Lock contention Flame Graph");
-            System.out.println("  --threads    Split profile by threads");
-            System.out.println("  --total      Accumulate the total value (time, bytes, etc.)");
-            System.out.println("  --lines      Show line numbers");
-            System.out.println("  --bci        Show bytecode indices");
-            System.out.println("  --simple     Simple class names instead of FQN");
-            System.out.println("  --dot        Dotted class names");
-            System.out.println("  --from TIME  Start time in ms (absolute or relative)");
-            System.out.println("  --to TIME    End time in ms (absolute or relative)");
-            System.out.println("  --collapsed  Use collapsed stacks output format");
+            System.out.println("  --alloc       Allocation Flame Graph");
+            System.out.println("  --live        Include only live objects in allocation profile");
+            System.out.println("  --lock        Lock contention Flame Graph");
+            System.out.println("  --threads     Split profile by threads");
+            System.out.println("  --state LIST  Filter samples by thread states: RUNNABLE, SLEEPING, etc.");
+            System.out.println("  --classify    Classify samples into predefined categories");
+            System.out.println("  --total       Accumulate the total value (time, bytes, etc.)");
+            System.out.println("  --lines       Show line numbers");
+            System.out.println("  --bci         Show bytecode indices");
+            System.out.println("  --simple      Simple class names instead of FQN");
+            System.out.println("  --dot         Dotted class names");
+            System.out.println("  --norm        Normalize names of hidden classes / lambdas");
+            System.out.println("  --from TIME   Start time in ms (absolute or relative)");
+            System.out.println("  --to TIME     End time in ms (absolute or relative)");
+            System.out.println("  --collapsed   Use collapsed stacks output format");
             System.exit(1);
         }
 

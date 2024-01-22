@@ -1,17 +1,6 @@
 /*
- * Copyright 2022 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include "j9ObjectSampler.h"
@@ -22,14 +11,14 @@
 void J9ObjectSampler::JavaObjectAlloc(jvmtiEnv* jvmti, JNIEnv* jni, jthread thread,
                                       jobject object, jclass object_klass, jlong size) {
     if (_enabled && updateCounter(_allocated_bytes, size, _interval)) {
-        recordAllocation(jvmti, jni, BCI_ALLOC, object, object_klass, size);
+        recordAllocation(jvmti, jni, ALLOC_SAMPLE, object, object_klass, size);
     }
 }
 
 void J9ObjectSampler::VMObjectAlloc(jvmtiEnv* jvmti, JNIEnv* jni, jthread thread,
                                     jobject object, jclass object_klass, jlong size) {
     if (_enabled && updateCounter(_allocated_bytes, size, _interval)) {
-        recordAllocation(jvmti, jni, BCI_ALLOC_OUTSIDE_TLAB, object, object_klass, size);
+        recordAllocation(jvmti, jni, ALLOC_OUTSIDE_TLAB, object, object_klass, size);
     }
 }
 

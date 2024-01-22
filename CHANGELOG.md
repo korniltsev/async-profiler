@@ -1,5 +1,56 @@
 # Changelog
 
+## [3.0] - 2024-01-20
+
+### Features
+ - #724: Binary launcher `asprof`
+ - #751: Profile non-Java processes
+ - #795: AsyncGetCallTrace replacement
+ - #719: Classify execution samples into categories in JFR converter
+ - #855: `ctimer` mode for accurate profiling without perf_events
+ - #740: Profile CPU + Wall clock together
+ - #736: Show targets of vtable/itable calls
+ - #777: Show JIT compilation task
+ - #644: RISC-V port
+ - #770: LoongArch64 port
+
+### Improvements
+ - #733: Make the same `libasyncProfiler` work with both glibc and musl
+ - #734: Support raw PMU event descriptors
+ - #759: Configure alternative profiling signal
+ - #761: Parse dynamic linking structures
+ - #723: `--clock` option to select JFR timestamp source
+ - #750: `--jfrsync` may specify a list of JFR events
+ - #849: Parse concatenated multi-chunk JFRs
+ - #833: Time-to-safepoint JFR event
+ - #832: Normalize names of hidden classes / lambdas
+ - #864: Reduce size of HTML Flame Graph
+ - #783: Shutdown asprof gracefully on SIGTERM
+ - Better demangling of C++ and Rust symbols
+ - DWARF unwinding for ARM64
+ - `JfrReader` can parse in-memory buffer
+ - Support custom events in `JfrReader`
+ - An option to read JFR file by chunks
+ - Record `GCHeapSummary` events in JFR
+
+### Bug fixes
+ - Workaround macOS crashes in SafeFetch
+ - Fixed attach to OpenJ9 on macOS
+ - Support `UseCompressedObjectHeaders` aka Lilliput
+ - Fixed allocation profiling on JDK 20.0.x
+ - Fixed context-switches profiling
+ - Prefer ObjectSampler to TLAB hooks for allocation profiling
+ - Improved accuracy of ObjectSampler in `--total` mode
+ - Make Flame Graph status line and search results always visible
+ - `loop` and `timeout` options did not work in some modes
+ - Restart interrupted poll/epoll_wait syscalls
+ - Fixed stack unwinding issues on ARM64
+ - Workaround for stale jmethodIDs
+ - Calculate ELF base address correctly
+ - Do not dump redundant threads in a JFR chunk
+ - `check` action prints result to a file
+ - Annotate JFR unit types with `@ContentType`
+
 ## [2.9] - 2022-11-27
 
 ### Features

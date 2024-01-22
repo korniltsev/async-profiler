@@ -1,17 +1,6 @@
 /*
- * Copyright 2022 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <string.h>
@@ -125,7 +114,7 @@ class LiveRefs {
 
                     int tid = _values[i].trace >> 32;
                     u32 call_trace_id = (u32)_values[i].trace;
-                    profiler->recordExternalSample(event._alloc_size, tid, BCI_LIVE_OBJECT, &event, call_trace_id);
+                    profiler->recordExternalSample(event._alloc_size, tid, LIVE_OBJECT, &event, call_trace_id);
                 }
                 jni->DeleteWeakGlobalRef(w);
             }
@@ -141,7 +130,7 @@ static LiveRefs live_refs;
 void ObjectSampler::SampledObjectAlloc(jvmtiEnv* jvmti, JNIEnv* jni, jthread thread,
                                        jobject object, jclass object_klass, jlong size) {
     if (_enabled) {
-        recordAllocation(jvmti, jni, BCI_ALLOC, object, object_klass, size);
+        recordAllocation(jvmti, jni, ALLOC_SAMPLE, object, object_klass, size);
     }
 }
 
@@ -149,7 +138,7 @@ void ObjectSampler::GarbageCollectionStart(jvmtiEnv* jvmti) {
     live_refs.gc();
 }
 
-void ObjectSampler::recordAllocation(jvmtiEnv* jvmti, JNIEnv* jni, int event_type,
+void ObjectSampler::recordAllocation(jvmtiEnv* jvmti, JNIEnv* jni, EventType event_type,
                                      jobject object, jclass object_klass, jlong size) {
     AllocEvent event;
     event._total_size = size > _interval ? size : _interval;
@@ -160,7 +149,7 @@ void ObjectSampler::recordAllocation(jvmtiEnv* jvmti, JNIEnv* jni, int event_typ
         u64 trace = Profiler::instance()->recordSample(NULL, 0, event_type, &event);
         live_refs.add(jni, object, size, trace);
     } else {
-        Profiler::instance()->recordSample(NULL, size, event_type, &event);
+        Profiler::instance()->recordSample(NULL, event._total_size, event_type, &event);
     }
 }
 

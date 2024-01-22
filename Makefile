@@ -1,27 +1,26 @@
-PROFILER_VERSION=2.9.0.2
+PROFILER_VERSION=3.0.0
 
 PACKAGE_NAME=async-profiler-$(PROFILER_VERSION)-$(OS_TAG)-$(ARCH_TAG)
 PACKAGE_DIR=/tmp/$(PACKAGE_NAME)
 
-LIB_PROFILER=libasyncProfiler.$(SOEXT)
-LIB_PROFILER_SO=libasyncProfiler.so
-JATTACH=jattach
-API_JAR=async-profiler.jar
-CONVERTER_JAR=converter.jar
+LAUNCHER=bin/asprof
+LIB_PROFILER=lib/libasyncProfiler.$(SOEXT)
+API_JAR=lib/async-profiler.jar
+CONVERTER_JAR=lib/converter.jar
 
-CFLAGS=-O3
-CXXFLAGS=-O3 -fno-omit-frame-pointer -fvisibility=hidden
-INCLUDES=-I$(JAVA_HOME)/include -Isrc/res -Isrc/helper
+CFLAGS=-O3 -fno-exceptions
+CXXFLAGS=-O3 -fno-exceptions -fno-omit-frame-pointer -fvisibility=hidden
+INCLUDES=-I$(JAVA_HOME)/include -Isrc/helper
 LIBS=-ldl -lpthread
 MERGE=true
 
 JAVAC=$(JAVA_HOME)/bin/javac
 JAR=$(JAVA_HOME)/bin/jar
-JAVA_TARGET=7
-JAVAC_OPTIONS=-source $(JAVA_TARGET) -target $(JAVA_TARGET) -Xlint:-options
+JAVA_TARGET=8
+JAVAC_OPTIONS=--release $(JAVA_TARGET) -Xlint:-options
 
 SOURCES := $(wildcard src/*.cpp)
-HEADERS := $(wildcard src/*.h src/fdtransfer/*.h)
+HEADERS := $(wildcard src/*.h)
 RESOURCES := $(wildcard src/res/*)
 JAVA_HELPER_CLASSES := $(wildcard src/helper/one/profiler/*.class)
 API_SOURCES := $(wildcard src/api/one/profiler/*.java)
@@ -35,7 +34,6 @@ OS:=$(shell uname -s)
 ifeq ($(OS),Darwin)
   CXXFLAGS += -D_XOPEN_SOURCE -D_DARWIN_C_SOURCE -Wl,-rpath,@executable_path/../lib -Wl,-rpath,@executable_path/../lib/server
   INCLUDES += -I$(JAVA_HOME)/include/darwin
-  FDTRANSFER_BIN=
   SOEXT=dylib
   PACKAGE_EXT=zip
   OS_TAG=macos
@@ -53,12 +51,10 @@ else
   endif
   LIBS += -lrt
   INCLUDES += -I$(JAVA_HOME)/include/linux
-  FDTRANSFER_BIN=build/fdtransfer
   SOEXT=so
   PACKAGE_EXT=tar.gz
   ifeq ($(findstring musl,$(shell ldd /bin/ls)),musl)
     OS_TAG=linux-musl
-    CXXFLAGS += -D__musl__
   else
     OS_TAG=linux
   endif
@@ -74,31 +70,31 @@ else
     else
       ARCH_TAG=arm32
     endif
+  else ifeq ($(findstring aarch64,$(ARCH)),aarch64)
+    ARCH_TAG=arm64
+  else ifeq ($(ARCH),ppc64le)
+    ARCH_TAG=ppc64le
+  else ifeq ($(ARCH),riscv64)
+    ARCH_TAG=riscv64
+  else ifeq ($(ARCH),loongarch64)
+    ARCH_TAG=loongarch64
   else
-    ifeq ($(findstring aarch64,$(ARCH)),aarch64)
-      ARCH_TAG=arm64
-    else
-      ifeq ($(ARCH),ppc64le)
-        ARCH_TAG=ppc64le
-      else
-        ARCH_TAG=x86
-      endif
-    endif
+    ARCH_TAG=x86
   endif
 endif
 
-ifneq ($(ARCH),ppc64le)
-  ifneq ($(ARCH_TAG),arm32)
-    CXXFLAGS += -momit-leaf-frame-pointer
-  endif
+ifneq (,$(findstring $(ARCH_TAG),x86 x64 arm64))
+  CXXFLAGS += -momit-leaf-frame-pointer
 endif
 
 
 .PHONY: all release test native clean
 
-all: build build/$(LIB_PROFILER) build/$(JATTACH) $(FDTRANSFER_BIN) build/$(API_JAR) build/$(CONVERTER_JAR)
+all: build/bin build/lib build/$(LIB_PROFILER) build/$(LAUNCHER) build/$(API_JAR) build/$(CONVERTER_JAR)
 
-release: build $(PACKAGE_NAME).$(PACKAGE_EXT)
+release: JAVA_TARGET=7
+
+release: $(PACKAGE_NAME).$(PACKAGE_EXT)
 
 $(PACKAGE_NAME).tar.gz: $(PACKAGE_DIR)
 	tar czf $@ -C $(PACKAGE_DIR)/.. $(PACKAGE_NAME)
@@ -109,38 +105,33 @@ $(PACKAGE_NAME).zip: $(PACKAGE_DIR)
 	ditto -c -k --keepParent $(PACKAGE_DIR) $@
 	rm -r $(PACKAGE_DIR)
 
-$(PACKAGE_DIR): build/$(LIB_PROFILER) build/$(JATTACH) $(FDTRANSFER_BIN) \
+$(PACKAGE_DIR): build/bin build/lib \
+                build/$(LIB_PROFILER) build/$(LAUNCHER) \
                 build/$(API_JAR) build/$(CONVERTER_JAR) \
-                profiler.sh LICENSE *.md
+                LICENSE *.md
 	mkdir -p $(PACKAGE_DIR)
-	cp -RP build profiler.sh LICENSE *.md $(PACKAGE_DIR)
+	cp -RP build/* LICENSE *.md $(PACKAGE_DIR)/
 	chmod -R 755 $(PACKAGE_DIR)
-	chmod 644 $(PACKAGE_DIR)/LICENSE $(PACKAGE_DIR)/*.md $(PACKAGE_DIR)/build/*.jar
+	chmod 644 $(PACKAGE_DIR)/lib/* $(PACKAGE_DIR)/LICENSE $(PACKAGE_DIR)/*.md
 
-%.$(SOEXT): %.so
-	rm -f $@
-	-ln -s $(<F) $@
+build/%:
+	mkdir -p $@
 
-build:
-	mkdir -p build
+build/$(LAUNCHER): src/launcher/* src/jattach/* src/fdtransfer.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DPROFILER_VERSION=\"$(PROFILER_VERSION)\" -o $@ src/launcher/*.cpp src/jattach/*.c
+	strip $@
 
-build/$(LIB_PROFILER_SO): $(SOURCES) $(HEADERS) $(RESOURCES) $(JAVA_HELPER_CLASSES)
+build/$(LIB_PROFILER): $(SOURCES) $(HEADERS) $(RESOURCES) $(JAVA_HELPER_CLASSES)
 ifeq ($(MERGE),true)
 	for f in src/*.cpp; do echo '#include "'$$f'"'; done |\
-	$(CXX) $(CXXFLAGS) -DPROFILER_VERSION=\"$(PROFILER_VERSION)\" $(INCLUDES) -fPIC -shared -o $@ -xc++ - $(LIBS)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -DPROFILER_VERSION=\"$(PROFILER_VERSION)\" $(INCLUDES) -fPIC -shared -o $@ -xc++ - $(LIBS)
 else
-	$(CXX) $(CXXFLAGS) -DPROFILER_VERSION=\"$(PROFILER_VERSION)\" $(INCLUDES) -fPIC -shared -o $@ $(SOURCES) $(LIBS)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -DPROFILER_VERSION=\"$(PROFILER_VERSION)\" $(INCLUDES) -fPIC -shared -o $@ $(SOURCES) $(LIBS)
 endif
-
-build/$(JATTACH): src/jattach/*.c src/jattach/*.h
-	$(CC) $(CFLAGS) -DJATTACH_VERSION=\"$(PROFILER_VERSION)-ap\" -o $@ src/jattach/*.c
-
-build/fdtransfer: src/fdtransfer/*.cpp src/fdtransfer/*.h src/jattach/psutil.c src/jattach/psutil.h
-	$(CXX) $(CFLAGS) -o $@ src/fdtransfer/*.cpp src/jattach/psutil.c
 
 build/$(API_JAR): $(API_SOURCES)
 	mkdir -p build/api
-	$(JAVAC) $(JAVAC_OPTIONS) -d build/api $^
+	$(JAVAC) $(JAVAC_OPTIONS) -d build/api $(API_SOURCES)
 	$(JAR) cf $@ -C build/api .
 	$(RM) -r build/api
 
@@ -151,7 +142,7 @@ build/$(CONVERTER_JAR): $(CONVERTER_SOURCES) $(RESOURCES)
 	$(RM) -r build/converter
 
 %.class: %.java
-	$(JAVAC) $(JAVAC_OPTIONS) -g:none $^
+	$(JAVAC) -source $(JAVA_TARGET) -target $(JAVA_TARGET) -Xlint:-options -g:none $^
 
 test: all
 	test/smoke-test.sh

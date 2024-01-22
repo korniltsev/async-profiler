@@ -1,19 +1,9 @@
 /*
- * Copyright 2017 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <pthread.h>
 #include <string.h>
 #include "lockTracer.h"
 #include "profiler.h"
@@ -29,6 +19,8 @@ jmethodID LockTracer::_getBlocker = NULL;
 RegisterNativesFunc LockTracer::_orig_RegisterNatives = NULL;
 UnsafeParkFunc LockTracer::_orig_Unsafe_park = NULL;
 bool LockTracer::_initialized = false;
+
+static pthread_key_t lock_tracer_tls = (pthread_key_t)0;
 
 Error LockTracer::start(Arguments& args) {
     _ticks_to_nanos = 1e9 / TSC::frequency();
@@ -65,6 +57,11 @@ void LockTracer::stop() {
 }
 
 void LockTracer::initialize() {
+    // On 64-bit platforms, we can store lock time in a pthread local
+    if (sizeof(void*) >= sizeof(jlong)) {
+        pthread_key_create(&lock_tracer_tls, NULL);
+    }
+
     jvmtiEnv* jvmti = VM::jvmti();
     JNIEnv* env = VM::jni();
 
@@ -102,18 +99,26 @@ void LockTracer::initialize() {
 
 void JNICALL LockTracer::MonitorContendedEnter(jvmtiEnv* jvmti, JNIEnv* env, jthread thread, jobject object) {
     jlong enter_time = TSC::ticks();
-    jvmti->SetTag(thread, enter_time);
+    if (sizeof(void*) >= sizeof(jlong) && lock_tracer_tls) {
+        pthread_setspecific(lock_tracer_tls, (void*)enter_time);
+    } else {
+        jvmti->SetTag(thread, enter_time);
+    }
 }
 
 void JNICALL LockTracer::MonitorContendedEntered(jvmtiEnv* jvmti, JNIEnv* env, jthread thread, jobject object) {
     jlong entered_time = TSC::ticks();
     jlong enter_time;
-    jvmti->GetTag(thread, &enter_time);
+    if (sizeof(void*) >= sizeof(jlong) && lock_tracer_tls) {
+        enter_time = (jlong)pthread_getspecific(lock_tracer_tls);
+    } else {
+        jvmti->GetTag(thread, &enter_time);
+    }
 
     // Time is meaningless if lock attempt has started before profiling
     if (_enabled && entered_time - enter_time >= _threshold && enter_time >= _start_time) {
         char* lock_name = getLockName(jvmti, env, object);
-        recordContendedLock(BCI_LOCK, enter_time, entered_time, lock_name, object, 0);
+        recordContendedLock(LOCK_SAMPLE, enter_time, entered_time, lock_name, object, 0);
         jvmti->Deallocate((unsigned char*)lock_name);
     }
 }
@@ -147,7 +152,7 @@ void JNICALL LockTracer::UnsafeParkHook(JNIEnv* env, jobject instance, jboolean 
         if (park_end_time - park_start_time >= _threshold) {
             char* lock_name = getLockName(jvmti, env, park_blocker);
             if (lock_name == NULL || isConcurrentLock(lock_name)) {
-                recordContendedLock(BCI_PARK, park_start_time, park_end_time, lock_name, park_blocker, time);
+                recordContendedLock(PARK_SAMPLE, park_start_time, park_end_time, lock_name, park_blocker, time);
             }
             jvmti->Deallocate((unsigned char*)lock_name);
         }
@@ -179,7 +184,7 @@ bool LockTracer::isConcurrentLock(const char* lock_name) {
            strncmp(lock_name, "Ljava/util/concurrent/Semaphore", 31) == 0;
 }
 
-void LockTracer::recordContendedLock(int event_type, u64 start_time, u64 end_time,
+void LockTracer::recordContendedLock(EventType event_type, u64 start_time, u64 end_time,
                                      const char* lock_name, jobject lock, jlong timeout) {
     LockEvent event;
     event._class_id = 0;

@@ -1,17 +1,6 @@
 /*
- * Copyright 2017 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #if defined(__arm__) || defined(__thumb__)
@@ -19,6 +8,7 @@
 #include <errno.h>
 #include <string.h>
 #include "stackFrame.h"
+#include "vmStructs.h"
 
 
 uintptr_t& StackFrame::pc() {
@@ -37,6 +27,10 @@ uintptr_t& StackFrame::retval() {
     return (uintptr_t&)_ucontext->uc_mcontext.arm_r0;
 }
 
+uintptr_t StackFrame::link() {
+    return (uintptr_t)_ucontext->uc_mcontext.arm_lr;
+}
+
 uintptr_t StackFrame::arg0() {
     return (uintptr_t)_ucontext->uc_mcontext.arm_r0;
 }
@@ -53,43 +47,66 @@ uintptr_t StackFrame::arg3() {
     return (uintptr_t)_ucontext->uc_mcontext.arm_r3;
 }
 
-void StackFrame::ret() {
-    _ucontext->uc_mcontext.arm_pc = _ucontext->uc_mcontext.arm_lr;
+uintptr_t StackFrame::jarg0() {
+    // Unimplemented
+    return 0;
 }
 
-bool StackFrame::popStub(instruction_t* entry, const char* name) {
-    instruction_t* ip = (instruction_t*)pc();
+uintptr_t StackFrame::method() {
+    return (uintptr_t)_ucontext->uc_mcontext.arm_r9;
+}
+
+uintptr_t StackFrame::senderSP() {
+    return (uintptr_t)_ucontext->uc_mcontext.arm_r4;
+}
+
+void StackFrame::ret() {
+    pc() = link();
+}
+
+
+bool StackFrame::unwindStub(instruction_t* entry, const char* name, uintptr_t& pc, uintptr_t& sp, uintptr_t& fp) {
+    instruction_t* ip = (instruction_t*)pc;
     if (ip == entry || *ip == 0xe12fff1e
         || strncmp(name, "itable", 6) == 0
         || strncmp(name, "vtable", 6) == 0
         || strcmp(name, "InlineCacheBuffer") == 0)
     {
-        ret();
+        pc = link();
         return true;
     }
     return false;
 }
 
-bool StackFrame::popMethod(instruction_t* entry) {
-    instruction_t* ip = (instruction_t*)pc();
+bool StackFrame::unwindCompiled(NMethod* nm, uintptr_t& pc, uintptr_t& sp, uintptr_t& fp) {
+    instruction_t* ip = (instruction_t*)pc;
+    instruction_t* entry = (instruction_t*)nm->entry();
     if (ip > entry && ip <= entry + 4 && (*ip & 0xffffff00) == 0xe24dd000) {
         //    push  {r11, lr}
         //    mov   r11, sp (optional)
         // -> sub   sp, sp, #offs
-        fp() = stackAt(0);
-        pc() = stackAt(1);
-        sp() += 8;
+        fp = ((uintptr_t*)sp)[0];
+        pc = ((uintptr_t*)sp)[1];
+        sp += 8;
         return true;
     } else if (*ip == 0xe8bd4800) {
         //    add   sp, sp, #offs
         // -> pop   {r11, lr}
-        fp() = stackAt(0);
-        pc() = stackAt(1);
-        sp() += 8;
+        fp = ((uintptr_t*)sp)[0];
+        pc = ((uintptr_t*)sp)[1];
+        sp += 8;
         return true;
     }
-    ret();
+    pc = link();
     return true;
+}
+
+void StackFrame::adjustSP(const void* entry, const void* pc, uintptr_t& sp) {
+    // Not needed
+}
+
+bool StackFrame::skipFaultInstruction() {
+    return false;
 }
 
 bool StackFrame::checkInterruptedSyscall() {

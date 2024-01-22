@@ -1,17 +1,6 @@
 /*
- * Copyright 2022 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 import one.jfr.ClassRef;
@@ -28,7 +17,6 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -53,6 +41,34 @@ public class jfr2pprof {
         @Override
         public boolean equals(final Object other) {
             return other instanceof Method && Arrays.equals(name, ((Method) other).name);
+        }
+    }
+
+    public static final class Location {
+        final Method method;
+        final int line;
+
+        public Location(final Method method, final int line) {
+            this.method = method;
+            this.line = line;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+
+            Location location = (Location) o;
+
+            if (line != location.line) return false;
+            return method.equals(location.method);
+        }
+
+        @Override
+        public int hashCode() {
+            int result = method.hashCode();
+            result = 31 * result + line;
+            return result;
         }
     }
 
@@ -104,7 +120,7 @@ public class jfr2pprof {
 
         // Used to de-dupe
         final Map<Method, Integer> functions = new HashMap<>();
-        final Map<Method, Integer> locations = new HashMap<>();
+        final Map<Location, Integer> locations = new HashMap<>();
 
         final Proto profile = new Proto(200_000)
                 .field(PROFILE_TIME_NANOS, reader.startNanos)
@@ -124,12 +140,11 @@ public class jfr2pprof {
 
         profile.field(PROFILE_SAMPLE_TYPE, sampleType);
 
-        final List<ExecutionSample> jfrSamples = reader.readAllEvents(ExecutionSample.class);
         final Dictionary<StackTrace> stackTraces = reader.stackTraces;
         long previousTime = reader.startTicks; // Mutate this to keep track of time deltas
 
         // Iterate over samples
-        for (final ExecutionSample jfrSample : jfrSamples) {
+        for (ExecutionSample jfrSample; (jfrSample = reader.readEvent(ExecutionSample.class)) != null; ) {
             final StackTrace stackTrace = stackTraces.get(jfrSample.stackTraceId);
             final long[] methods = stackTrace.methods;
             final byte[] types = stackTrace.types;
@@ -156,8 +171,8 @@ public class jfr2pprof {
 
                     functions.put(method, funcId);
                 }
-
-                final Integer locaId = locations.get(method);
+                final Location locKey = new Location(method, line);
+                final Integer locaId = locations.get(locKey);
                 if (null == locaId) {
                     final int locId = locationId++;
                     final Proto locLine = new Proto(16).field(LINE_FUNCTION_ID, functions.get(method));
@@ -171,10 +186,10 @@ public class jfr2pprof {
 
                     profile.field(PROFILE_LOCATION, location);
 
-                    locations.put(method, locId);
+                    locations.put(locKey, locId);
                 }
 
-                sample.field(SAMPLE_LOCATION_ID, locations.get(method));
+                sample.field(SAMPLE_LOCATION_ID, locations.get(locKey));
             }
 
             profile.field(PROFILE_SAMPLE, sample);

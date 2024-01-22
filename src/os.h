@@ -1,17 +1,6 @@
 /*
- * Copyright 2018 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #ifndef _OS_H
@@ -31,7 +20,7 @@ typedef void (*TimerCallback)(void*);
 const int WAKEUP_SIGNAL = SIGIO;
 
 enum ThreadState {
-    THREAD_INVALID,
+    THREAD_UNKNOWN,
     THREAD_RUNNING,
     THREAD_SLEEPING
 };
@@ -89,6 +78,7 @@ class OS {
     static void safeFree(void* addr, size_t size);
 
     static bool getCpuDescription(char* buf, size_t size);
+    static int getCpuCount();
     static u64 getProcessCpuTime(u64* utime, u64* stime);
     static u64 getTotalCpuTime(u64* utime, u64* stime);
 

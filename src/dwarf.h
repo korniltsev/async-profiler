@@ -1,17 +1,6 @@
 /*
- * Copyright 2021 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #ifndef _DWARF_H
@@ -21,32 +10,6 @@
 #include "arch.h"
 
 
-#if defined(__x86_64__)
-
-#define DWARF_SUPPORTED true
-
-const int DW_REG_FP = 6;
-const int DW_REG_SP = 7;
-const int DW_REG_PC = 16;
-
-#elif defined(__i386__)
-
-#define DWARF_SUPPORTED true
-
-const int DW_REG_FP = 5;
-const int DW_REG_SP = 4;
-const int DW_REG_PC = 8;
-
-#else
-
-#define DWARF_SUPPORTED false
-
-const int DW_REG_FP = 0;
-const int DW_REG_SP = 1;
-const int DW_REG_PC = 2;
-
-#endif
-
 const int DW_REG_PLT = 128;      // denotes special rule for PLT entries
 const int DW_REG_INVALID = 255;  // denotes unsupported configuration
 
@@ -55,11 +18,56 @@ const int DW_SAME_FP = 0x80000000;
 const int DW_STACK_SLOT = sizeof(void*);
 
 
+#if defined(__x86_64__)
+
+#define DWARF_SUPPORTED true
+
+const int DW_REG_FP = 6;
+const int DW_REG_SP = 7;
+const int DW_REG_PC = 16;
+const int EMPTY_FRAME_SIZE = DW_STACK_SLOT;
+const int LINKED_FRAME_SIZE = 2 * DW_STACK_SLOT;
+
+#elif defined(__i386__)
+
+#define DWARF_SUPPORTED true
+
+const int DW_REG_FP = 5;
+const int DW_REG_SP = 4;
+const int DW_REG_PC = 8;
+const int EMPTY_FRAME_SIZE = DW_STACK_SLOT;
+const int LINKED_FRAME_SIZE = 2 * DW_STACK_SLOT;
+
+#elif defined(__aarch64__)
+
+#define DWARF_SUPPORTED true
+
+const int DW_REG_FP = 29;
+const int DW_REG_SP = 31;
+const int DW_REG_PC = 30;
+const int EMPTY_FRAME_SIZE = 0;
+const int LINKED_FRAME_SIZE = 0;
+
+#else
+
+#define DWARF_SUPPORTED false
+
+const int DW_REG_FP = 0;
+const int DW_REG_SP = 1;
+const int DW_REG_PC = 2;
+const int EMPTY_FRAME_SIZE = 0;
+const int LINKED_FRAME_SIZE = 0;
+
+#endif
+
+
 struct FrameDesc {
     u32 loc;
     int cfa;
     int fp_off;
+    int pc_off;
 
+    static FrameDesc empty_frame;
     static FrameDesc default_frame;
 
     static int comparator(const void* p1, const void* p2) {
@@ -142,8 +150,8 @@ class DwarfParser {
     void parseInstructions(u32 loc, const char* end);
     int parseExpression();
 
-    void addRecord(u32 loc, u32 cfa_reg, int cfa_off, int fp_off);
-    FrameDesc* addRecordRaw(u32 loc, int cfa, int fp_off);
+    void addRecord(u32 loc, u32 cfa_reg, int cfa_off, int fp_off, int pc_off);
+    FrameDesc* addRecordRaw(u32 loc, int cfa, int fp_off, int pc_off);
 
   public:
     DwarfParser(const char* name, const char* image_base, const char* eh_frame_hdr);

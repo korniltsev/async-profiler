@@ -1,17 +1,6 @@
 /*
- * Copyright 2017 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #ifdef __linux__
@@ -25,18 +14,18 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
-#include <pthread.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <linux/perf_event.h>
 #include "arch.h"
+#include "fdtransferClient.h"
 #include "j9StackTraces.h"
 #include "log.h"
 #include "os.h"
 #include "perfEvents.h"
-#include "fdtransferClient.h"
 #include "profiler.h"
 #include "spinLock.h"
 #include "stackFrame.h"
@@ -150,43 +139,14 @@ static bool setPmuConfig(const char* device, const char* param, __u64* config, _
     return false;
 }
 
-
-static void** _pthread_entry = NULL;
-
-// Intercept thread creation/termination by patching libjvm's GOT entry for pthread_setspecific().
-// HotSpot puts VMThread into TLS on thread start, and resets on thread end.
-static int pthread_setspecific_hook(pthread_key_t key, const void* value) {
-    if (key != VMThread::key()) {
-        return pthread_setspecific(key, value);
+// Perf events consume one file descriptor per thread.
+// Make sure the current limit is the highest possible.
+static void adjustFDLimit() {
+    struct rlimit rlim;
+    if (getrlimit(RLIMIT_NOFILE, &rlim) == 0 && rlim.rlim_cur < rlim.rlim_max) {
+        rlim.rlim_cur = rlim.rlim_max;
+        setrlimit(RLIMIT_NOFILE, &rlim);
     }
-    if (pthread_getspecific(key) == value) {
-        return 0;
-    }
-
-    if (value != NULL) {
-        int result = pthread_setspecific(key, value);
-        PerfEvents::createForThread(OS::threadId());
-        return result;
-    } else {
-        PerfEvents::destroyForThread(OS::threadId());
-        return pthread_setspecific(key, value);
-    }
-}
-
-static void** lookupThreadEntry() {
-    // Depending on Zing version, pthread_setspecific is called either from libazsys.so or from libjvm.so
-    if (VM::isZing()) {
-        CodeCache* libazsys = Profiler::instance()->findLibraryByName("libazsys");
-        if (libazsys != NULL) {
-            void** entry = libazsys->findGlobalOffsetEntry((void*)&pthread_setspecific);
-            if (entry != NULL) {
-                return entry;
-            }
-        }
-    }
-
-    CodeCache* lib = Profiler::instance()->findJvmLibrary("libj9thr");
-    return lib != NULL ? lib->findGlobalOffsetEntry((void*)&pthread_setspecific) : NULL;
 }
 
 
@@ -395,7 +355,7 @@ struct PerfEventType {
 
     static PerfEventType* forName(const char* name) {
         // Look through the table of predefined perf events
-        for (int i = 0; i < IDX_PREDEFINED; i++) {
+        for (int i = 0; i <= IDX_PREDEFINED; i++) {
             if (strcmp(name, AVAILABLE_EVENTS[i].name) == 0) {
                 return &AVAILABLE_EVENTS[i];
             }
@@ -459,10 +419,17 @@ struct PerfEventType {
 #define LOAD_MISS(perf_hw_cache_id) \
     ((perf_hw_cache_id) | PERF_COUNT_HW_CACHE_OP_READ << 8 | PERF_COUNT_HW_CACHE_RESULT_MISS << 16)
 
+// Hardware breakpoint with interval=1 causes an infinite loop on ARM64
+#ifdef __aarch64__
+#  define BKPT_INTERVAL 2
+#else
+#  define BKPT_INTERVAL 1
+#endif
+
 PerfEventType PerfEventType::AVAILABLE_EVENTS[] = {
     {"cpu",          DEFAULT_INTERVAL, PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CPU_CLOCK},
     {"page-faults",                 1, PERF_TYPE_SOFTWARE, PERF_COUNT_SW_PAGE_FAULTS},
-    {"context-switches",            1, PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CONTEXT_SWITCHES},
+    {"context-switches",            2, PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CONTEXT_SWITCHES},
 
     {"cycles",                1000000, PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES},
     {"instructions",          1000000, PERF_TYPE_HARDWARE, PERF_COUNT_HW_INSTRUCTIONS},
@@ -479,7 +446,7 @@ PerfEventType PerfEventType::AVAILABLE_EVENTS[] = {
     {"rNNN",                     1000, PERF_TYPE_RAW, 0}, /* IDX_RAW */
     {"pmu/event-descriptor/",    1000, PERF_TYPE_RAW, 0}, /* IDX_PMU */
 
-    {"mem:breakpoint",              1, PERF_TYPE_BREAKPOINT, 0}, /* IDX_BREAKPOINT */
+    {"mem:breakpoint",  BKPT_INTERVAL, PERF_TYPE_BREAKPOINT, 0}, /* IDX_BREAKPOINT */
     {"trace:tracepoint",            1, PERF_TYPE_TRACEPOINT, 0}, /* IDX_TRACEPOINT */
 
     {"kprobe:func",                 1, 0, 0}, /* IDX_KPROBE */
@@ -541,19 +508,12 @@ class PerfEvent : public SpinLock {
 int PerfEvents::_max_events = 0;
 PerfEvent* PerfEvents::_events = NULL;
 PerfEventType* PerfEvents::_event_type = NULL;
-long PerfEvents::_interval;
 Ring PerfEvents::_ring;
-CStack PerfEvents::_cstack;
 bool PerfEvents::_use_mmap_page;
 
 int PerfEvents::createForThread(int tid) {
     if (tid >= _max_events) {
         Log::warn("tid[%d] > pid_max[%d]. Restart profiler after changing pid_max", tid, _max_events);
-        return -1;
-    }
-
-    PerfEventType* event_type = _event_type;
-    if (event_type == NULL) {
         return -1;
     }
 
@@ -563,6 +523,7 @@ int PerfEvents::createForThread(int tid) {
         return -1;
     }
 
+    PerfEventType* event_type = _event_type;
     struct perf_event_attr attr = {0};
     attr.size = sizeof(attr);
     attr.type = event_type->type;
@@ -591,7 +552,7 @@ int PerfEvents::createForThread(int tid) {
         attr.exclude_user = 1;
     }
 
-    if (_cstack == CSTACK_FP || _cstack == CSTACK_DWARF) {
+    if (_cstack >= CSTACK_FP) {
         attr.exclude_callchain_user = 1;
     }
 
@@ -600,7 +561,6 @@ int PerfEvents::createForThread(int tid) {
         attr.sample_type |= PERF_SAMPLE_BRANCH_STACK | PERF_SAMPLE_REGS_USER;
         attr.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_CALL_STACK;
         attr.sample_regs_user = 1ULL << PERF_REG_PC;
-        attr.exclude_callchain_user = 1;
     }
 #else
 #warning "Compiling without LBR support. Kernel headers 4.1+ required"
@@ -617,6 +577,10 @@ int PerfEvents::createForThread(int tid) {
         int err = errno;
         Log::warn("perf_event_open for TID %d failed: %s", tid, strerror(err));
         _events[tid]._fd = 0;
+        if (isResourceLimit(err) && _current != NULL) {
+            // Emergency shutdown
+            stop();
+        }
         return err;
     }
 
@@ -635,7 +599,7 @@ int PerfEvents::createForThread(int tid) {
     ex.pid = tid;
 
     int err;
-    if (fcntl(fd, F_SETFL, O_ASYNC) < 0 || fcntl(fd, F_SETSIG, SIGPROF) < 0 || fcntl(fd, F_SETOWN_EX, &ex) < 0) {
+    if (fcntl(fd, F_SETFL, O_ASYNC) < 0 || fcntl(fd, F_SETSIG, _signal) < 0 || fcntl(fd, F_SETOWN_EX, &ex) < 0) {
         err = errno;
         Log::warn("perf_event fcntl failed: %s", strerror(err));
     } else if (ioctl(fd, PERF_EVENT_IOC_RESET, 0) < 0 || ioctl(fd, PERF_EVENT_IOC_REFRESH, 1) < 0) {
@@ -697,7 +661,7 @@ void PerfEvents::signalHandler(int signo, siginfo_t* siginfo, void* ucontext) {
     if (_enabled) {
         u64 counter = readCounter(siginfo, ucontext);
         ExecutionEvent event;
-        Profiler::instance()->recordSample(ucontext, counter, 0, &event);
+        Profiler::instance()->recordSample(ucontext, counter, PERF_SAMPLE, &event);
     } else {
         resetBuffer(OS::threadId());
     }
@@ -748,7 +712,7 @@ Error PerfEvents::check(Arguments& args) {
         return Error("Only arguments 1-4 can be counted");
     }
 
-    if (_pthread_entry == NULL && (_pthread_entry = lookupThreadEntry()) == NULL) {
+    if (!setupThreadHook()) {
         return Error("Could not set pthread hook");
     }
 
@@ -777,7 +741,7 @@ Error PerfEvents::check(Arguments& args) {
         attr.exclude_kernel = Symbols::haveKernelSymbols() ? 0 : 1;
     }
 
-    if (_cstack == CSTACK_FP || _cstack == CSTACK_DWARF) {
+    if (args._cstack >= CSTACK_FP) {
         attr.exclude_callchain_user = 1;
     }
 
@@ -786,7 +750,6 @@ Error PerfEvents::check(Arguments& args) {
         attr.sample_type |= PERF_SAMPLE_BRANCH_STACK | PERF_SAMPLE_REGS_USER;
         attr.branch_sample_type = PERF_SAMPLE_BRANCH_USER | PERF_SAMPLE_BRANCH_CALL_STACK;
         attr.sample_regs_user = 1ULL << PERF_REG_PC;
-        attr.exclude_callchain_user = 1;
     }
 #endif
 
@@ -807,7 +770,7 @@ Error PerfEvents::start(Arguments& args) {
         return Error("Only arguments 1-4 can be counted");
     }
 
-    if (_pthread_entry == NULL && (_pthread_entry = lookupThreadEntry()) == NULL) {
+    if (!setupThreadHook()) {
         return Error("Could not set pthread hook");
     }
 
@@ -815,6 +778,8 @@ Error PerfEvents::start(Arguments& args) {
         return Error("interval must be positive");
     }
     _interval = args._interval ? args._interval : _event_type->default_interval;
+    _cstack = args._cstack;
+    _signal = args._signal == 0 ? SIGPROF : args._signal & 0xff;
 
     _ring = args._ring;
     if (_ring != RING_USER && !Symbols::haveKernelSymbols()) {
@@ -823,8 +788,9 @@ Error PerfEvents::start(Arguments& args) {
                   "  sysctl kernel.kptr_restrict=0");
         _ring = RING_USER;
     }
-    _cstack = args._cstack;
     _use_mmap_page = _cstack != CSTACK_NO && (_ring != RING_USER || _cstack == CSTACK_DEFAULT || _cstack == CSTACK_LBR);
+
+    adjustFDLimit();
 
     int max_events = OS::getMaxThreadId();
     if (max_events != _max_events) {
@@ -835,34 +801,26 @@ Error PerfEvents::start(Arguments& args) {
 
     if (VM::isOpenJ9()) {
         if (_cstack == CSTACK_DEFAULT) _cstack = CSTACK_DWARF;
-        OS::installSignalHandler(SIGPROF, signalHandlerJ9);
+        OS::installSignalHandler(_signal, signalHandlerJ9);
         Error error = J9StackTraces::start(args);
         if (error) {
             return error;
         }
     } else {
-        OS::installSignalHandler(SIGPROF, signalHandler);
+        OS::installSignalHandler(_signal, signalHandler);
     }
 
     // Enable pthread hook before traversing currently running threads
-    __atomic_store_n(_pthread_entry, (void*)pthread_setspecific_hook, __ATOMIC_RELEASE);
+    enableThreadHook();
 
     // Create perf_events for all existing threads
-    int err;
-    bool created = false;
-    ThreadList* thread_list = OS::listThreads();
-    for (int tid; (tid = thread_list->next()) != -1; ) {
-        if ((err = createForThread(tid)) == 0) {
-            created = true;
-        }
-    }
-    delete thread_list;
-
-    if (!created) {
-        __atomic_store_n(_pthread_entry, (void*)pthread_setspecific, __ATOMIC_RELEASE);
-        J9StackTraces::stop();
+    int err = createForAllThreads();
+    if (err) {
+        stop();
         if (err == EACCES || err == EPERM) {
             return Error("No access to perf events. Try --fdtransfer or --all-user option or 'sysctl kernel.perf_event_paranoid=1'");
+        } else if (isResourceLimit(err)) {
+            return Error("Perf events resource limit. Check 'ulimit -n'");
         } else {
             return Error("Perf events unavailable");
         }
@@ -871,7 +829,7 @@ Error PerfEvents::start(Arguments& args) {
 }
 
 void PerfEvents::stop() {
-    __atomic_store_n(_pthread_entry, (void*)pthread_setspecific, __ATOMIC_RELEASE);
+    disableThreadHook();
     for (int i = 0; i < _max_events; i++) {
         destroyForThread(i);
     }

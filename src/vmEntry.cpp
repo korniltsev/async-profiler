@@ -1,17 +1,6 @@
 /*
- * Copyright 2016 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <dlfcn.h>
@@ -20,6 +9,7 @@
 #include <sys/mman.h>
 #include "vmEntry.h"
 #include "arguments.h"
+#include "asprof.h"
 #include "j9Ext.h"
 #include "j9ObjectSampler.h"
 #include "javaApi.h"
@@ -35,8 +25,6 @@
 const int ARGUMENTS_ERROR = 100;
 const int COMMAND_ERROR = 200;
 
-static Arguments _agent_args(true);
-
 JavaVM* VM::_vm;
 jvmtiEnv* VM::_jvmti = NULL;
 
@@ -48,15 +36,11 @@ bool VM::_can_sample_objects = false;
 jvmtiError (JNICALL *VM::_orig_RedefineClasses)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
 jvmtiError (JNICALL *VM::_orig_RetransformClasses)(jvmtiEnv*, jint, const jclass* classes);
 
-void* VM::_libjvm;
-void* VM::_libjava;
 AsyncGetCallTrace VM::_asyncGetCallTrace;
 JVM_GetManagement VM::_getManagement;
+JVM_MemoryFunc VM::_totalMemory;
+JVM_MemoryFunc VM::_freeMemory;
 
-
-static void wakeupHandler(int signo) {
-    // Dummy handler for interrupting syscalls
-}
 
 static bool isZeroInterpreterMethod(const char* blob_name) {
     return strncmp(blob_name, "_ZN15ZeroInterpreter", 20) == 0
@@ -80,6 +64,10 @@ static bool isOpenJ9JitStub(const char* blob_name) {
     return false;
 }
 
+static bool isCompilerEntry(const char* blob_name) {
+    return strncmp(blob_name, "_ZN13CompileBroker25invoke_compiler_on_method", 45) == 0;
+}
+
 static void* resolveMethodId(void** mid) {
     return mid == NULL || *mid < (void*)4096 ? NULL : *mid;
 }
@@ -97,7 +85,7 @@ bool VM::init(JavaVM* vm, bool attach) {
     }
 
     Dl_info dl_info;
-    if (dladdr((const void*)wakeupHandler, &dl_info) && dl_info.dli_fname != NULL) {
+    if (dladdr((const void*)resolveMethodId, &dl_info) && dl_info.dli_fname != NULL) {
         // Make sure async-profiler DSO cannot be unloaded, since it contains JVM callbacks.
         // Don't use ELF NODELETE flag because of https://sourceware.org/bugzilla/show_bug.cgi?id=20839
         dlopen(dl_info.dli_fname, RTLD_LAZY | RTLD_NODELETE);
@@ -117,11 +105,11 @@ bool VM::init(JavaVM* vm, bool attach) {
     }
 
     if (is_hotspot && _jvmti->GetSystemProperty("java.vm.version", &prop) == 0) {
-        if (strncmp(prop, "25.", 3) == 0) {
+        if (strncmp(prop, "25.", 3) == 0 && prop[3] > '0') {
             _hotspot_version = 8;
-        } else if (strncmp(prop, "24.", 3) == 0) {
+        } else if (strncmp(prop, "24.", 3) == 0 && prop[3] > '0') {
             _hotspot_version = 7;
-        } else if (strncmp(prop, "20.", 3) == 0) {
+        } else if (strncmp(prop, "20.", 3) == 0 && prop[3] > '0') {
             _hotspot_version = 6;
         } else if ((_hotspot_version = atoi(prop)) < 9) {
             _hotspot_version = 9;
@@ -129,9 +117,16 @@ bool VM::init(JavaVM* vm, bool attach) {
         _jvmti->Deallocate((unsigned char*)prop);
     }
 
-    _libjvm = getLibraryHandle("libjvm.so");
-    _asyncGetCallTrace = (AsyncGetCallTrace)dlsym(_libjvm, "AsyncGetCallTrace");
-    _getManagement = (JVM_GetManagement)dlsym(_libjvm, "JVM_GetManagement");
+    // JVM symbols are globally visible on macOS
+    void* libjvm = RTLD_DEFAULT;
+    if (OS::isLinux() && (libjvm = dlopen("libjvm.so", RTLD_LAZY)) == NULL) {
+        Log::warn("Failed to load libjvm.so: %s", dlerror());
+        libjvm = RTLD_DEFAULT;
+    }
+    _asyncGetCallTrace = (AsyncGetCallTrace)dlsym(libjvm, "AsyncGetCallTrace");
+    _getManagement = (JVM_GetManagement)dlsym(libjvm, "JVM_GetManagement");
+    _totalMemory = (JVM_MemoryFunc)dlsym(libjvm, "JVM_TotalMemory");
+    _freeMemory = (JVM_MemoryFunc)dlsym(libjvm, "JVM_FreeMemory");
 
     Profiler* profiler = Profiler::instance();
     profiler->updateSymbols(false);
@@ -148,13 +143,15 @@ bool VM::init(JavaVM* vm, bool attach) {
 
     VMStructs::init(lib);
     if (is_zero_vm) {
-        lib->mark(isZeroInterpreterMethod);
+        lib->mark(isZeroInterpreterMethod, MARK_INTERPRETER);
     } else if (isOpenJ9()) {
-        lib->mark(isOpenJ9InterpreterMethod);
+        lib->mark(isOpenJ9InterpreterMethod, MARK_INTERPRETER);
         CodeCache* libjit = profiler->findJvmLibrary("libj9jit");
         if (libjit != NULL) {
-            libjit->mark(isOpenJ9JitStub);
+            libjit->mark(isOpenJ9JitStub, MARK_INTERPRETER);
         }
+    } else {
+        lib->mark(isCompilerEntry, MARK_COMPILER_ENTRY);
     }
 
     if (!attach && hotspot_version() == 8 && OS::isLinux()) {
@@ -204,12 +201,14 @@ bool VM::init(JavaVM* vm, bool attach) {
     callbacks.VMObjectAlloc = J9ObjectSampler::VMObjectAlloc;
     callbacks.SampledObjectAlloc = ObjectSampler::SampledObjectAlloc;
     callbacks.GarbageCollectionStart = ObjectSampler::GarbageCollectionStart;
+    callbacks.GarbageCollectionFinish = Profiler::GarbageCollectionFinish;
     _jvmti->SetEventCallbacks(&callbacks, sizeof(callbacks));
 
     _jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_VM_DEATH, NULL);
     _jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_LOAD, NULL);
     _jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_PREPARE, NULL);
     _jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_DYNAMIC_CODE_GENERATED, NULL);
+    _jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_GARBAGE_COLLECTION_FINISH, NULL);
 
     if (hotspot_version() == 0 || !CodeHeap::available()) {
         // Workaround for JDK-8173361: avoid CompiledMethodLoad events when possible
@@ -223,6 +222,15 @@ bool VM::init(JavaVM* vm, bool attach) {
         }
     }
 
+    if (_can_sample_objects) {
+        // SetHeapSamplingInterval does not have immediate effect, so apply the configuration
+        // as early as possible to allow profiling all startup allocations
+        char* use_tlab = (char*)JVMFlag::find("UseTLAB");
+        if (use_tlab != NULL && *use_tlab == 0) {
+            _jvmti->SetHeapSamplingInterval(0);
+        }
+    }
+
     if (attach) {
         loadAllMethodIDs(jvmti(), jni());
         _jvmti->GenerateEvents(JVMTI_EVENT_DYNAMIC_CODE_GENERATED);
@@ -231,21 +239,17 @@ bool VM::init(JavaVM* vm, bool attach) {
         _jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_VM_INIT, NULL);
     }
 
-    OS::installSignalHandler(WAKEUP_SIGNAL, NULL, wakeupHandler);
-
     return true;
 }
 
 // Run late initialization when JVM is ready
 void VM::ready() {
+    Profiler::setupSignalHandlers();
+
     {
         JitWriteProtection jit(true);
         VMStructs::ready();
     }
-
-    Profiler::setupSignalHandlers();
-
-    _libjava = getLibraryHandle("libjava.so");
 
     // Make sure we reload method IDs upon class retransformation
     JVMTIFunctions* functions = *(JVMTIFunctions**)_jvmti;
@@ -265,18 +269,6 @@ void VM::applyPatch(char* func, const char* patch, const char* end_patch) {
         __builtin___clear_cache(func, func + size);
         mprotect((void*)start_page, end_page - start_page, PROT_READ | PROT_EXEC);
     }
-}
-
-void* VM::getLibraryHandle(const char* name) {
-    if (OS::isLinux()) {
-        void* handle = dlopen(name, RTLD_LAZY);
-        if (handle != NULL) {
-            return handle;
-        }
-        Log::warn("Failed to load %s: %s", name, dlerror());
-    }
-    // JVM symbols are globally visible on macOS
-    return RTLD_DEFAULT;
 }
 
 void VM::loadMethodIDs(jvmtiEnv* jvmti, JNIEnv* jni, jclass klass) {
@@ -313,32 +305,30 @@ void VM::loadAllMethodIDs(jvmtiEnv* jvmti, JNIEnv* jni) {
     }
 }
 
-void VM::restartProfiler() {
-    Profiler::instance()->restart(_agent_args);
-}
-
 void JNICALL VM::VMInit(jvmtiEnv* jvmti, JNIEnv* jni, jthread thread) {
     ready();
     loadAllMethodIDs(jvmti, jni);
 
     // Allow profiler server only at JVM startup
-    if (_agent_args._server != NULL) {
-        if (JavaAPI::startHttpServer(jvmti, jni, _agent_args._server)) {
-            Log::info("Profiler server started at %s", _agent_args._server);
+    if (_global_args._server != NULL) {
+        if (JavaAPI::startHttpServer(jvmti, jni, _global_args._server)) {
+            Log::info("Profiler server started at %s", _global_args._server);
         } else {
             Log::error("Failed to start profiler server");
         }
     }
 
     // Delayed start of profiler if agent has been loaded at VM bootstrap
-    Error error = Profiler::instance()->run(_agent_args);
-    if (error) {
-        Log::error("%s", error.message());
+    if (!_global_args._preloaded) {
+        Error error = Profiler::instance()->run(_global_args);
+        if (error) {
+            Log::error("%s", error.message());
+        }
     }
 }
 
 void JNICALL VM::VMDeath(jvmtiEnv* jvmti, JNIEnv* jni) {
-    Profiler::instance()->shutdown(_agent_args);
+    Profiler::instance()->shutdown(_global_args);
 }
 
 jvmtiError VM::RedefineClassesHook(jvmtiEnv* jvmti, jint class_count, const jvmtiClassDefinition* class_definitions) {
@@ -376,13 +366,15 @@ jvmtiError VM::RetransformClassesHook(jvmtiEnv* jvmti, jint class_count, const j
 
 extern "C" DLLEXPORT jint JNICALL
 Agent_OnLoad(JavaVM* vm, char* options, void* reserved) {
-    Error error = _agent_args.parse(options);
+    if (!_global_args._preloaded) {
+        Error error = _global_args.parse(options);
 
-    Log::open(_agent_args);
+        Log::open(_global_args);
 
-    if (error) {
-        Log::error("%s", error.message());
-        return ARGUMENTS_ERROR;
+        if (error) {
+            Log::error("%s", error.message());
+            return ARGUMENTS_ERROR;
+        }
     }
 
     if (!VM::init(vm, false)) {
@@ -395,7 +387,7 @@ Agent_OnLoad(JavaVM* vm, char* options, void* reserved) {
 
 extern "C" DLLEXPORT jint JNICALL
 Agent_OnAttach(JavaVM* vm, char* options, void* reserved) {
-    Arguments args(true);
+    Arguments args;
     Error error = args.parse(options);
 
     Log::open(args);
@@ -410,15 +402,16 @@ Agent_OnAttach(JavaVM* vm, char* options, void* reserved) {
         return COMMAND_ERROR;
     }
 
-    // Save the arguments in case of shutdown
-    if (args._action == ACTION_START || args._action == ACTION_RESUME) {
-        _agent_args.save(args);
-    }
-
     error = Profiler::instance()->run(args);
     if (error) {
         Log::error("%s", error.message());
+        if (args.hasTemporaryLog()) Log::close();
         return COMMAND_ERROR;
+    }
+
+    if (args._action == ACTION_STOP && args.hasTemporaryLog()) {
+        // The launcher immediately deletes logs after printing
+        Log::close();
     }
 
     return 0;

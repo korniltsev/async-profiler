@@ -1,17 +1,6 @@
 /*
- * Copyright 2017 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #ifndef _ARGUMENTS_H
@@ -28,9 +17,12 @@ const char* const EVENT_CPU    = "cpu";
 const char* const EVENT_ALLOC  = "alloc";
 const char* const EVENT_LOCK   = "lock";
 const char* const EVENT_WALL   = "wall";
+const char* const EVENT_CTIMER = "ctimer";
 const char* const EVENT_ITIMER = "itimer";
 
-enum Action {
+#define SHORT_ENUM __attribute__((__packed__))
+
+enum SHORT_ENUM Action {
     ACTION_NONE,
     ACTION_START,
     ACTION_RESUME,
@@ -40,39 +32,47 @@ enum Action {
     ACTION_STATUS,
     ACTION_MEMINFO,
     ACTION_LIST,
-    ACTION_VERSION,
-    ACTION_FULL_VERSION
+    ACTION_VERSION
 };
 
-enum Counter {
+enum SHORT_ENUM Counter {
     COUNTER_SAMPLES,
     COUNTER_TOTAL
 };
 
-enum Ring {
+enum SHORT_ENUM Ring {
     RING_ANY,
     RING_KERNEL,
     RING_USER
 };
 
 enum Style {
-    STYLE_SIMPLE       = 1,
-    STYLE_DOTTED       = 2,
-    STYLE_SIGNATURES   = 4,
-    STYLE_ANNOTATE     = 8,
-    STYLE_LIB_NAMES    = 16,
-    STYLE_NO_SEMICOLON = 32
+    STYLE_SIMPLE       = 0x1,
+    STYLE_DOTTED       = 0x2,
+    STYLE_NORMALIZE    = 0x4,
+    STYLE_SIGNATURES   = 0x8,
+    STYLE_ANNOTATE     = 0x10,
+    STYLE_LIB_NAMES    = 0x20,
+    STYLE_NO_SEMICOLON = 0x40
 };
 
-enum CStack {
+// Whenever enum changes, update SETTING_CSTACK in FlightRecorder
+enum SHORT_ENUM CStack {
     CSTACK_DEFAULT,
     CSTACK_NO,
     CSTACK_FP,
     CSTACK_DWARF,
-    CSTACK_LBR
+    CSTACK_LBR,
+    CSTACK_VM
 };
 
-enum Output {
+enum SHORT_ENUM Clock {
+    CLK_DEFAULT,
+    CLK_TSC,
+    CLK_MONOTONIC
+};
+
+enum SHORT_ENUM Output {
     OUTPUT_NONE,
     OUTPUT_TEXT,
     OUTPUT_SVG,  // obsolete
@@ -87,8 +87,29 @@ enum JfrOption {
     NO_SYSTEM_PROPS = 0x2,
     NO_NATIVE_LIBS  = 0x4,
     NO_CPU_LOAD     = 0x8,
+    NO_HEAP_SUMMARY = 0x10,
 
-    JFR_SYNC_OPTS   = NO_SYSTEM_INFO | NO_SYSTEM_PROPS | NO_NATIVE_LIBS | NO_CPU_LOAD
+    JFR_SYNC_OPTS   = NO_SYSTEM_INFO | NO_SYSTEM_PROPS | NO_NATIVE_LIBS | NO_CPU_LOAD | NO_HEAP_SUMMARY
+};
+
+struct StackWalkFeatures {
+    // Stack recovery techniques used to workaround AsyncGetCallTrace flaws
+    unsigned short unknown_java  : 1;
+    unsigned short unwind_stub   : 1;
+    unsigned short unwind_comp   : 1;
+    unsigned short unwind_native : 1;
+    unsigned short java_anchor   : 1;
+    unsigned short gc_traces     : 1;
+
+    // Additional HotSpot-specific features
+    unsigned short probe_sp      : 1;
+    unsigned short vtable_target : 1;
+    unsigned short comp_task     : 1;
+    unsigned short _reserved     : 7;
+
+    StackWalkFeatures() : unknown_java(1), unwind_stub(1), unwind_comp(1), unwind_native(1), java_anchor(1), gc_traces(1),
+                          probe_sp(0), vtable_target(0), comp_task(0), _reserved(0) {
+    }
 };
 
 
@@ -122,7 +143,6 @@ class Arguments {
   private:
     char* _buf;
     bool _shared;
-    bool _persistent;
 
     void appendToEmbeddedList(int& list, char* value);
     const char* expandFilePattern(const char* pattern);
@@ -141,8 +161,9 @@ class Arguments {
     long _interval;
     long _alloc;
     long _lock;
-    int  _jstackdepth;
-    int _safe_mode;
+    long _wall;
+    int _jstackdepth;
+    int _signal;
     const char* _file;
     const char* _log;
     const char* _loglevel;
@@ -153,13 +174,16 @@ class Arguments {
     int _exclude;
     unsigned char _mcache;
     bool _loop;
+    bool _preloaded;
     bool _threads;
     bool _sched;
     bool _live;
     bool _fdtransfer;
     const char* _fdtransfer_path;
     int _style;
+    StackWalkFeatures _features;
     CStack _cstack;
+    Clock _clock;
     Output _output;
     long _chunk_size;
     long _chunk_time;
@@ -175,10 +199,9 @@ class Arguments {
     double _minwidth;
     bool _reverse;
 
-    Arguments(bool persistent = false) :
+    Arguments() :
         _buf(NULL),
         _shared(false),
-        _persistent(persistent),
         _action(ACTION_NONE),
         _counter(COUNTER_SAMPLES),
         _ring(RING_ANY),
@@ -187,8 +210,9 @@ class Arguments {
         _interval(0),
         _alloc(-1),
         _lock(-1),
+        _wall(-1),
         _jstackdepth(DEFAULT_JSTACKDEPTH),
-        _safe_mode(0),
+        _signal(0),
         _file(NULL),
         _log(NULL),
         _loglevel(NULL),
@@ -199,13 +223,16 @@ class Arguments {
         _exclude(0),
         _mcache(0),
         _loop(false),
+        _preloaded(false),
         _threads(false),
         _sched(false),
         _live(false),
         _fdtransfer(false),
         _fdtransfer_path(NULL),
         _style(0),
+        _features(),
         _cstack(CSTACK_DEFAULT),
+        _clock(CLK_DEFAULT),
         _output(OUTPUT_NONE),
         _chunk_size(100 * 1024 * 1024),
         _chunk_time(3600),
@@ -223,15 +250,17 @@ class Arguments {
 
     ~Arguments();
 
-    void save(Arguments& other);
+    void save();
 
     Error parse(const char* args);
 
     const char* file();
 
+    bool hasTemporaryLog() const;
+
     bool hasOutputFile() const {
         return _file != NULL &&
-            (_action == ACTION_STOP || _action == ACTION_DUMP ? _output != OUTPUT_JFR : _action >= ACTION_STATUS);
+            (_action == ACTION_STOP || _action == ACTION_DUMP ? _output != OUTPUT_JFR : _action >= ACTION_CHECK);
     }
 
     bool hasOption(JfrOption option) const {
@@ -241,5 +270,7 @@ class Arguments {
     friend class FrameName;
     friend class Recording;
 };
+
+extern Arguments _global_args;
 
 #endif // _ARGUMENTS_H

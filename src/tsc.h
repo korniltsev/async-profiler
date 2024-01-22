@@ -1,23 +1,16 @@
 /*
- * Copyright 2021 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #ifndef _TSC_H
 #define _TSC_H
 
+#include "arguments.h"
 #include "os.h"
+
+
+const u64 NANOTIME_FREQ = 1000000000;
 
 
 #if defined(__x86_64__)
@@ -51,16 +44,13 @@ static inline u64 rdtsc() {
 class TSC {
   private:
     static bool _initialized;
+    static bool _available;
     static bool _enabled;
     static u64 _offset;
     static u64 _frequency;
 
   public:
-    static void initialize();
-
-    static bool initialized() {
-        return TSC_SUPPORTED ? _initialized : true;
-    }
+    static void enable(Clock clock);
 
     static bool enabled() {
         return TSC_SUPPORTED && _enabled;
@@ -71,7 +61,7 @@ class TSC {
     }
 
     static u64 frequency() {
-        return _frequency;
+        return enabled() ? _frequency : NANOTIME_FREQ;
     }
 };
 

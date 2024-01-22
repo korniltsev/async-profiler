@@ -1,17 +1,6 @@
 /*
- * Copyright 2021 Andrei Pangin
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright The async-profiler authors
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <stdlib.h>
@@ -20,34 +9,35 @@
 
 
 enum {
-    DW_CFA_nop                = 0x0,
-    DW_CFA_set_loc            = 0x1,
-    DW_CFA_advance_loc1       = 0x2,
-    DW_CFA_advance_loc2       = 0x3,
-    DW_CFA_advance_loc4       = 0x4,
-    DW_CFA_offset_extended    = 0x5,
-    DW_CFA_restore_extended   = 0x6,
-    DW_CFA_undefined          = 0x7,
-    DW_CFA_same_value         = 0x8,
-    DW_CFA_register           = 0x9,
-    DW_CFA_remember_state     = 0xa,
-    DW_CFA_restore_state      = 0xb,
-    DW_CFA_def_cfa            = 0xc,
-    DW_CFA_def_cfa_register   = 0xd,
-    DW_CFA_def_cfa_offset     = 0xe,
-    DW_CFA_def_cfa_expression = 0xf,
-    DW_CFA_expression         = 0x10,
-    DW_CFA_offset_extended_sf = 0x11,
-    DW_CFA_def_cfa_sf         = 0x12,
-    DW_CFA_def_cfa_offset_sf  = 0x13,
-    DW_CFA_val_offset         = 0x14,
-    DW_CFA_val_offset_sf      = 0x15,
-    DW_CFA_val_expression     = 0x16,
-    DW_CFA_GNU_args_size      = 0x2e,
+    DW_CFA_nop                     = 0x0,
+    DW_CFA_set_loc                 = 0x1,
+    DW_CFA_advance_loc1            = 0x2,
+    DW_CFA_advance_loc2            = 0x3,
+    DW_CFA_advance_loc4            = 0x4,
+    DW_CFA_offset_extended         = 0x5,
+    DW_CFA_restore_extended        = 0x6,
+    DW_CFA_undefined               = 0x7,
+    DW_CFA_same_value              = 0x8,
+    DW_CFA_register                = 0x9,
+    DW_CFA_remember_state          = 0xa,
+    DW_CFA_restore_state           = 0xb,
+    DW_CFA_def_cfa                 = 0xc,
+    DW_CFA_def_cfa_register        = 0xd,
+    DW_CFA_def_cfa_offset          = 0xe,
+    DW_CFA_def_cfa_expression      = 0xf,
+    DW_CFA_expression              = 0x10,
+    DW_CFA_offset_extended_sf      = 0x11,
+    DW_CFA_def_cfa_sf              = 0x12,
+    DW_CFA_def_cfa_offset_sf       = 0x13,
+    DW_CFA_val_offset              = 0x14,
+    DW_CFA_val_offset_sf           = 0x15,
+    DW_CFA_val_expression          = 0x16,
+    DW_CFA_AARCH64_negate_ra_state = 0x2d,
+    DW_CFA_GNU_args_size           = 0x2e,
 
-    DW_CFA_advance_loc        = 0x1,
-    DW_CFA_offset             = 0x2,
-    DW_CFA_restore            = 0x3,
+    DW_CFA_advance_loc             = 0x1,
+    DW_CFA_offset                  = 0x2,
+    DW_CFA_restore                 = 0x3,
 };
 
 enum {
@@ -65,7 +55,8 @@ enum {
 };
 
 
-FrameDesc FrameDesc::default_frame = {0, DW_REG_FP | (2 * DW_STACK_SLOT) << 8, -2 * DW_STACK_SLOT};
+FrameDesc FrameDesc::empty_frame = {0, DW_REG_SP | EMPTY_FRAME_SIZE << 8, DW_SAME_FP, -EMPTY_FRAME_SIZE};
+FrameDesc FrameDesc::default_frame = {0, DW_REG_FP | LINKED_FRAME_SIZE << 8, -LINKED_FRAME_SIZE, -LINKED_FRAME_SIZE + DW_STACK_SLOT};
 
 
 DwarfParser::DwarfParser(const char* name, const char* image_base, const char* eh_frame_hdr) {
@@ -135,7 +126,7 @@ void DwarfParser::parseFde() {
     u32 range_len = get32();
     _ptr += getLeb();
     parseInstructions(range_start, fde_start + fde_len);
-    addRecord(range_start + range_len, DW_REG_SP, DW_STACK_SLOT, DW_SAME_FP);
+    addRecord(range_start + range_len, DW_REG_FP, LINKED_FRAME_SIZE, -LINKED_FRAME_SIZE, -LINKED_FRAME_SIZE + DW_STACK_SLOT);
 }
 
 void DwarfParser::parseInstructions(u32 loc, const char* end) {
@@ -143,9 +134,9 @@ void DwarfParser::parseInstructions(u32 loc, const char* end) {
     const int data_align = _data_align;
 
     u32 cfa_reg = DW_REG_SP;
-    int cfa_off = DW_STACK_SLOT;
+    int cfa_off = EMPTY_FRAME_SIZE;
     int fp_off = DW_SAME_FP;
-    int pc_off = -DW_STACK_SLOT;
+    int pc_off = -EMPTY_FRAME_SIZE;
 
     u32 rem_cfa_reg;
     int rem_cfa_off;
@@ -162,15 +153,15 @@ void DwarfParser::parseInstructions(u32 loc, const char* end) {
                         _ptr = end;
                         break;
                     case DW_CFA_advance_loc1:
-                        addRecord(loc, cfa_reg, cfa_off, fp_off);
+                        addRecord(loc, cfa_reg, cfa_off, fp_off, pc_off);
                         loc += get8() * code_align;
                         break;
                     case DW_CFA_advance_loc2:
-                        addRecord(loc, cfa_reg, cfa_off, fp_off);
+                        addRecord(loc, cfa_reg, cfa_off, fp_off, pc_off);
                         loc += get16() * code_align;
                         break;
                     case DW_CFA_advance_loc4:
-                        addRecord(loc, cfa_reg, cfa_off, fp_off);
+                        addRecord(loc, cfa_reg, cfa_off, fp_off, pc_off);
                         loc += get32() * code_align;
                         break;
                     case DW_CFA_offset_extended:
@@ -183,7 +174,9 @@ void DwarfParser::parseInstructions(u32 loc, const char* end) {
                     case DW_CFA_restore_extended:
                     case DW_CFA_undefined:
                     case DW_CFA_same_value:
-                        skipLeb();
+                        if (getLeb() == DW_REG_FP) {
+                            fp_off = DW_SAME_FP;
+                        }
                         break;
                     case DW_CFA_register:
                         skipLeb();
@@ -251,6 +244,10 @@ void DwarfParser::parseInstructions(u32 loc, const char* end) {
                             _ptr += getLeb();
                         }
                         break;
+#ifdef __aarch64__
+                    case DW_CFA_AARCH64_negate_ra_state:
+                        break;
+#endif
                     case DW_CFA_GNU_args_size:
                         skipLeb();
                         break;
@@ -260,7 +257,7 @@ void DwarfParser::parseInstructions(u32 loc, const char* end) {
                 }
                 break;
             case DW_CFA_advance_loc:
-                addRecord(loc, cfa_reg, cfa_off, fp_off);
+                addRecord(loc, cfa_reg, cfa_off, fp_off, pc_off);
                 loc += (op & 0x3f) * code_align;
                 break;
             case DW_CFA_offset:
@@ -271,11 +268,14 @@ void DwarfParser::parseInstructions(u32 loc, const char* end) {
                 }
                 break;
             case DW_CFA_restore:
+                if ((op & 0x3f) == DW_REG_FP) {
+                    fp_off = DW_SAME_FP;
+                }
                 break;
         }
     }
 
-    addRecord(loc, cfa_reg, cfa_off, fp_off);
+    addRecord(loc, cfa_reg, cfa_off, fp_off, pc_off);
 }
 
 // Parse a limited subset of DWARF expressions, which is used in DW_CFA_val_expression
@@ -332,14 +332,15 @@ int DwarfParser::parseExpression() {
     return pc_off;
 }
 
-void DwarfParser::addRecord(u32 loc, u32 cfa_reg, int cfa_off, int fp_off) {
+void DwarfParser::addRecord(u32 loc, u32 cfa_reg, int cfa_off, int fp_off, int pc_off) {
     int cfa = cfa_reg | cfa_off << 8;
-    if (_prev == NULL || (_prev->loc == loc && --_count >= 0) || _prev->cfa != cfa || _prev->fp_off != fp_off) {
-        _prev = addRecordRaw(loc, cfa, fp_off);
+    if (_prev == NULL || (_prev->loc == loc && --_count >= 0) ||
+            _prev->cfa != cfa || _prev->fp_off != fp_off || _prev->pc_off != pc_off) {
+        _prev = addRecordRaw(loc, cfa, fp_off, pc_off);
     }
 }
 
-FrameDesc* DwarfParser::addRecordRaw(u32 loc, int cfa, int fp_off) {
+FrameDesc* DwarfParser::addRecordRaw(u32 loc, int cfa, int fp_off, int pc_off) {
     if (_count >= _capacity) {
         _capacity *= 2;
         _table = (FrameDesc*)realloc(_table, _capacity * sizeof(FrameDesc));
@@ -349,5 +350,6 @@ FrameDesc* DwarfParser::addRecordRaw(u32 loc, int cfa, int fp_off) {
     f->loc = loc;
     f->cfa = cfa;
     f->fp_off = fp_off;
+    f->pc_off = pc_off;
     return f;
 }
