@@ -58,9 +58,6 @@ jobs:
     needs: [build-linux, build-macos]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Download Artifacts
         uses: actions/download-artifact@v4
 
@@ -70,8 +67,9 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: >
-            *.tar.gz
-            *.zip
+            amd64-linux-binaries/*.tar.gz
+            arm64-linux-binaries/*.tar.gz
+            macos-binaries/*.zip
           prerelease: false
           draft: true
         env:
