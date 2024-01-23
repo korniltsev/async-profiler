@@ -12,7 +12,9 @@ jobs:
       matrix:
         include:
           - platform: "linux/amd64"
+            name: "amd64"
           - platform: "linux/arm64"
+            name: "arm64"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -26,7 +28,7 @@ jobs:
       - name: Upload Release Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform }}-linux-binaries
+          name: ${{ matrix.name }}-linux-binaries
           path: '*.tar.gz'
 
   build-macos:
