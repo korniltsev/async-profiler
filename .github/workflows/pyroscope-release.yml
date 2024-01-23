@@ -46,7 +46,7 @@ jobs:
           java-version: '11'
 
       - name: Make release
-        run: make release
+        run: FAT_BINARY=true make release
 
       - name: Upload Release Artifacts
         uses: actions/upload-artifact@v4
