@@ -1,7 +1,9 @@
 name: Release Workflow
 
 on:
-  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
 
 jobs:
   build-linux:
@@ -45,18 +47,27 @@ jobs:
         uses: actions/upload-artifact@v2
         with:
           name: macos-binaries
-          path: '*.tar.gz'
+          path: '*.zip'
 
   create-release:
     needs: [build-linux, build-macos]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
       - name: Download Artifacts
         uses: actions/download-artifact@v2
+
+      - run: echo ${{ github.ref }} | grep $(make version)
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: '**/*.tar.gz'
+          files: >
+            **/*.tar.gz
+            **/*.zip
+          prerelease: false
+          draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

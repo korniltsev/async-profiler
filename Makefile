@@ -161,3 +161,6 @@ native:
 
 clean:
 	$(RM) -r build
+
+version:
+	@echo $(PROFILER_VERSION)
