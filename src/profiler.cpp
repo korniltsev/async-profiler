@@ -4,7 +4,6 @@
  */
 
 #include <algorithm>
-#include <fstream>
 #include <dlfcn.h>
 #include <unistd.h>
 #include <stdint.h>
@@ -1295,7 +1294,7 @@ Error Profiler::flushJfr() {
     return Error::OK;
 }
 
-Error Profiler::dump(std::ostream& out, Arguments& args) {
+Error Profiler::dump(dumpstream& out, Arguments& args) {
     MutexLocker ml(_state_lock);
     if (_state != IDLE && _state != RUNNING) {
         return Error("Profiler has not started");
@@ -1333,7 +1332,7 @@ Error Profiler::dump(std::ostream& out, Arguments& args) {
     return Error::OK;
 }
 
-void Profiler::printUsedMemory(std::ostream& out) {
+void Profiler::printUsedMemory(dumpstream& out) {
     size_t call_trace_storage = _call_trace_storage.usedMemory();
     size_t dictionaries = _class_map.usedMemory() + _symbol_map.usedMemory() + _thread_filter.usedMemory() + _jfr.usedMemory();
 
@@ -1379,7 +1378,7 @@ void Profiler::switchThreadEvents(jvmtiEventMode mode) {
  * 
  * <frame>;<frame>;...;<topmost frame> <count>
  */
-void Profiler::dumpCollapsed(std::ostream& out, Arguments& args) {
+void Profiler::dumpCollapsed(dumpstream& out, Arguments& args) {
     FrameName fn(args, args._style | STYLE_NO_SEMICOLON, _epoch, _thread_names_lock, _thread_names);
     char buf[32];
 
@@ -1400,13 +1399,13 @@ void Profiler::dumpCollapsed(std::ostream& out, Arguments& args) {
         // Beware of locale-sensitive conversion
         out.write(buf, snprintf(buf, sizeof(buf), "%llu\n", counter));
     }
-
+    out.flush();
     if (!out.good()) {
         Log::warn("Output file may be incomplete");
     }
 }
 
-void Profiler::dumpFlameGraph(std::ostream& out, Arguments& args, bool tree) {
+void Profiler::dumpFlameGraph(dumpstream& out, Arguments& args, bool tree) {
     char title[64];
     if (args._title == NULL) {
         Engine* active_engine = activeEngine();
@@ -1466,7 +1465,7 @@ void Profiler::dumpFlameGraph(std::ostream& out, Arguments& args, bool tree) {
     flamegraph.dump(out, tree);
 }
 
-void Profiler::dumpText(std::ostream& out, Arguments& args) {
+void Profiler::dumpText(dumpstream& out, Arguments& args) {
     FrameName fn(args, args._style | STYLE_DOTTED, _epoch, _thread_names_lock, _thread_names);
     char buf[1024] = {0};
 
@@ -1656,7 +1655,7 @@ void Profiler::timerLoop(void* timer_id) {
     }
 }
 
-Error Profiler::runInternal(Arguments& args, std::ostream& out) {
+Error Profiler::runInternal(Arguments& args, dumpstream& out) {
     switch (args._action) {
         case ACTION_START:
         case ACTION_RESUME: {
@@ -1744,14 +1743,17 @@ Error Profiler::runInternal(Arguments& args, std::ostream& out) {
 
 Error Profiler::run(Arguments& args) {
     if (!args.hasOutputFile()) {
-        return runInternal(args, std::cout);
+        dumpstream out(stdout);
+        return runInternal(args, out);
     } else {
         // Open output file under the lock to avoid races with background timer
         MutexLocker ml(_state_lock);
-        std::ofstream out(args.file(), std::ios::out | std::ios::trunc);
-        if (!out.is_open()) {
+        FILE *f = fopen(args.file(), "w");
+        if (!f)
+        {
             return Error("Could not open output file");
         }
+        dumpstream out(f);
         Error error = runInternal(args, out);
         out.close();
         return error;
@@ -1767,10 +1769,11 @@ Error Profiler::restart(Arguments& args) {
     }
 
     if (args._file != NULL && args._output != OUTPUT_NONE && args._output != OUTPUT_JFR) {
-        std::ofstream out(args.file(), std::ios::out | std::ios::trunc);
-        if (!out.is_open()) {
+        FILE *f = fopen(args.file(), "w");
+        if (!f) {
             return Error("Could not open output file");
         }
+        dumpstream out(f);
         error = dump(out, args);
         out.close();
         if (error) {

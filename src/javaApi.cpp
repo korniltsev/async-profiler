@@ -3,8 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <fstream>
-#include <sstream>
 #include <errno.h>
 #include <string.h>
 #include "asprof.h"
@@ -71,21 +69,27 @@ Java_one_profiler_AsyncProfiler_execute0(JNIEnv* env, jobject unused, jstring co
     Log::open(args);
 
     if (!args.hasOutputFile()) {
-        std::ostringstream out;
+        memdumpstream ss;
+        dumpstream &out = ss.stream();
         error = Profiler::instance()->runInternal(args, out);
-        if (!error) {
-            if (out.tellp() >= 0x3fffffff) {
+        out.flush();
+        if (!error && out.good()) {
+            if (ss.size() >= 0x3fffffff) {
                 throwNew(env, "java/lang/IllegalStateException", "Output exceeds string size limit");
                 return NULL;
             }
-            return env->NewStringUTF(out.str().c_str());
+            return env->NewStringUTF(ss.buf());
+        }
+        if (!error && !out.good()) {
+            error = Error("memdumpstream memory allocation failure");
         }
     } else {
-        std::ofstream out(args.file(), std::ios::out | std::ios::trunc);
-        if (!out.is_open()) {
+        FILE *f = fopen(args.file(), "w");
+        if (!f) {
             throwNew(env, "java/io/IOException", strerror(errno));
             return NULL;
         }
+        dumpstream out(f);
         error = Profiler::instance()->runInternal(args, out);
         out.close();
         if (!error) {

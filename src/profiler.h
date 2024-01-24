@@ -6,7 +6,6 @@
 #ifndef _PROFILER_H
 #define _PROFILER_H
 
-#include <iostream>
 #include <map>
 #include <time.h>
 #include "arch.h"
@@ -20,6 +19,7 @@
 #include "log.h"
 #include "mutex.h"
 #include "spinLock.h"
+#include "dumpstream.h"
 #include "threadFilter.h"
 #include "trap.h"
 #include "vmEntry.h"
@@ -145,9 +145,9 @@ class Profiler {
     void lockAll();
     void unlockAll();
 
-    void dumpCollapsed(std::ostream& out, Arguments& args);
-    void dumpFlameGraph(std::ostream& out, Arguments& args, bool tree);
-    void dumpText(std::ostream& out, Arguments& args);
+    void dumpCollapsed(dumpstream& out, Arguments& args);
+    void dumpFlameGraph(dumpstream& out, Arguments& args, bool tree);
+    void dumpText(dumpstream& out, Arguments& args);
 
     static Profiler* const _instance;
 
@@ -189,15 +189,15 @@ class Profiler {
     CodeCacheArray* nativeLibs() { return &_native_libs; }
 
     Error run(Arguments& args);
-    Error runInternal(Arguments& args, std::ostream& out);
+    Error runInternal(Arguments& args, dumpstream& out);
     Error restart(Arguments& args);
     void shutdown(Arguments& args);
     Error check(Arguments& args);
     Error start(Arguments& args, bool reset);
     Error stop(bool restart = false);
     Error flushJfr();
-    Error dump(std::ostream& out, Arguments& args);
-    void printUsedMemory(std::ostream& out);
+    Error dump(dumpstream& out, Arguments& args);
+    void printUsedMemory(dumpstream& out);
     void switchThreadEvents(jvmtiEventMode mode);
     int convertNativeTrace(int native_frames, const void** callchain, ASGCT_CallFrame* frames);
     u64 recordSample(void* ucontext, u64 counter, EventType event_type, Event* event);

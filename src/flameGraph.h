@@ -6,12 +6,12 @@
 #ifndef _FLAMEGRAPH_H
 #define _FLAMEGRAPH_H
 
-#include <iostream>
 #include <map>
 #include <string>
 #include "arch.h"
 #include "arguments.h"
 #include "vmEntry.h"
+#include "dumpstream.h"
 
 
 class Trie {
@@ -75,10 +75,10 @@ class FlameGraph {
     u64 _last_x;
     u64 _last_total;
 
-    void printFrame(std::ostream& out, u32 key, const Trie& f, int level, u64 x);
-    void printTreeFrame(std::ostream& out, const Trie& f, int level, const char** names);
-    void printCpool(std::ostream& out);
-    const char* printTill(std::ostream& out, const char* data, const char* till);
+    void printFrame(dumpstream& out, u32 key, const Trie& f, int level, u64 x);
+    void printTreeFrame(dumpstream& out, const Trie& f, int level, const char** names);
+    void printCpool(dumpstream& out);
+    const char* printTill(dumpstream& out, const char* data, const char* till);
 
   public:
     FlameGraph(const char* title, Counter counter, double minwidth, bool reverse) :
@@ -100,7 +100,7 @@ class FlameGraph {
 
     Trie* addChild(Trie* f, const char* name, FrameTypeId type, u64 value);
 
-    void dump(std::ostream& out, bool tree);
+    void dump(dumpstream& out, bool tree);
 };
 
 #endif // _FLAMEGRAPH_H

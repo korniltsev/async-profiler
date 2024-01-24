@@ -3,8 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <fstream>
-#include <sstream>
 #include "asprof.h"
 #include "hooks.h"
 #include "profiler.h"
@@ -34,22 +32,27 @@ DLLEXPORT asprof_error_t asprof_execute(const char* command, asprof_writer_t out
 
     if (!args.hasOutputFile()) {
         // FIXME: get rid of stream
-        std::ostringstream out;
+        memdumpstream ss;
+        dumpstream &out = ss.stream();
         error = Profiler::instance()->runInternal(args, out);
-        if (!error) {
+        if (!error && out.good()) {
             if (output_callback != NULL) {
-                output_callback(out.str().data(), out.str().size());
+                output_callback(ss.buf(), ss.size());
             }
             return NULL;
         }
+        if (!error && !out.good()) {
+            error = Error("memdumpstream memory allocation failure");
+        }
     } else {
-        std::ofstream out(args.file(), std::ios::out | std::ios::trunc);
-        if (!out.is_open()) {
+        FILE *f = fopen(args.file(), "w");
+        if (!f) {
             return asprof_error("Could not open output file");
         }
+        dumpstream out(f);
         error = Profiler::instance()->runInternal(args, out);
         out.close();
-        if (!error) {
+        if (!error && out.good()) {
             return NULL;
         }
     }
